@@ -89,13 +89,13 @@ pipeline {
 
        stage('Package Module') {
     steps {
-        sh '''
-            mkdir -p ${ARTIFACTS_DIR}/module
-            find . -name "*.tf" -exec cp --parents {} ${ARTIFACTS_DIR}/module/ \\;
-            tar -czf ${ARTIFACTS_DIR}/module.tar.gz -C ${ARTIFACTS_DIR}/module .
-        '''
-                 }
-               }
+        sh '''#!/bin/bash
+mkdir -p ${ARTIFACTS_DIR}/module
+find . -name "*.tf" -exec cp --parents {} ${ARTIFACTS_DIR}/module/ \\;
+tar -czf ${ARTIFACTS_DIR}/module.tar.gz -C ${ARTIFACTS_DIR}/module .
+'''
+    }
+}
 
 
         stage('Create Module in TFC') {
