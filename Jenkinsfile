@@ -9,7 +9,7 @@ pipeline {
     }
 
     environment {
-        TF_API_TOKEN = credentials('terraform-cloud-api-token')
+        TF_API_TOKEN = credentials('terraform-cloud-api-token') // Set once here
         REGISTRY_NAME = 'private'
         GIT_COMMIT_SHA = "${env.GIT_COMMIT}"
         WORKSPACE_DIR = "${env.WORKSPACE}"
@@ -76,45 +76,38 @@ pipeline {
             }
         }
 
-         stage('Check/Create Module') {
-  steps {
-    script {
-      echo "📦 Checking if module already exists in registry..."
+        stage('Check/Create Module') {
+            steps {
+                script {
+                    echo "📦 Checking if module already exists in registry..."
 
-      def moduleExists = false
+                    def moduleExists = false
 
-      withCredentials([string(credentialsId: 'TF_API_TOKEN_ID', variable: 'TF_API_TOKEN')]) {
-        def response = sh(
-          script: '''
-            curl -s -o artifacts/check_module_response.json -w "%{http_code}" \
-              -H "Authorization: Bearer $TF_API_TOKEN" \
-              https://app.terraform.io/api/v2/registry/modules/your-org/module-name
-          ''',
-          returnStdout: true
-        ).trim()
+                    def responseCode = sh(
+                        script: """
+                            mkdir -p artifacts
+                            curl -s -o artifacts/check_module_response.json -w "%{http_code}" \\
+                              -H "Authorization: Bearer ${TF_API_TOKEN}" \\
+                              https://app.terraform.io/api/v2/registry/modules/${params.ORG}/${params.MODULE_NAME}/${params.MODULE_PROVIDER}
+                        """,
+                        returnStdout: true
+                    ).trim()
 
-        if (response == "200") {
-          moduleExists = true
+                    if (responseCode == "200") {
+                        moduleExists = true
+                        echo "✅ Module already exists. Skipping creation."
+                        currentBuild.result = 'SUCCESS'
+                        return
+                    } else {
+                        echo "ℹ️ Module does not exist yet. Proceeding to creation."
+                        if (fileExists('artifacts/check_module_response.json')) {
+                            def parsed = readJSON file: 'artifacts/check_module_response.json'
+                            echo "Module check response: ${parsed}"
+                        }
+                    }
+                }
+            }
         }
-      }
-
-      if (moduleExists) {
-        echo "✅ Module already exists. Skipping creation."
-        // Safely skip further processing
-        currentBuild.result = 'SUCCESS'
-        return
-      }
-
-      // Now it's safe to read JSON
-      def parsed = readJSON file: 'artifacts/check_module_response.json'
-      echo "Parsed response: ${parsed}"
-      // Proceed to creation/upload steps
-    }
-  }
-}
-
-
-
 
         stage('Package Module') {
             steps {
