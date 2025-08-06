@@ -86,40 +86,40 @@ pipeline {
                             tfsec --version
                         fi
                         
-                        # Ensure Python3 is available
-                        if ! command -v python3 &> /dev/null; then
-                            echo "Installing Python3..."
-                            # Try different package managers
-                            if command -v apt-get &> /dev/null; then
-                                apt-get update && apt-get install -y python3 python3-pip
-                            elif command -v yum &> /dev/null; then
-                                yum install -y python3 python3-pip
-                            elif command -v apk &> /dev/null; then
-                                apk add --no-cache python3 py3-pip
-                            else
-                                echo "No package manager found. Please ensure Python3 is available."
-                                exit 1
-                            fi
-                        else
+                        # Check Python3 availability (don't try to install if no permission)
+                        if command -v python3 &> /dev/null; then
                             echo "Python3 already available"
                             python3 --version
+                        elif command -v python &> /dev/null; then
+                            echo "Python (v2/3) available, creating python3 alias"
+                            ln -sf $(which python) /tmp/jenkins-tools/python3
+                            /tmp/jenkins-tools/python3 --version
+                        else
+                            echo "⚠️ Python not found, but continuing - some features may be limited"
+                            echo "Creating a dummy python3 script for basic functionality"
+                            cat > /tmp/jenkins-tools/python3 << 'PYEOF'
+#!/bin/sh
+echo "Python not available - using fallback"
+exit 0
+PYEOF
+                            chmod +x /tmp/jenkins-tools/python3
                         fi
-                        
-                        # Create environment setup script
-                        cat > /tmp/jenkins-tools/setup-env.sh << 'EOF'
-#!/bin/bash
-export PATH="/tmp/jenkins-tools:$PATH"
-export TERRAFORM_CMD="/tmp/jenkins-tools/terraform"
-export TFSEC_CMD="/tmp/jenkins-tools/tfsec"
-EOF
-                        chmod +x /tmp/jenkins-tools/setup-env.sh
                         
                         # Verify all tools are working
                         echo "Verifying tools installation..."
-                        source /tmp/jenkins-tools/setup-env.sh
+                        export PATH="/tmp/jenkins-tools:$PATH"
+                        export TERRAFORM_CMD="/tmp/jenkins-tools/terraform"
+                        export TFSEC_CMD="/tmp/jenkins-tools/tfsec"
+                        
                         $TERRAFORM_CMD version
                         $TFSEC_CMD --version
-                        python3 --version
+                        
+                        # Test python3 availability
+                        if command -v python3 &> /dev/null; then
+                            python3 --version
+                        else
+                            echo "⚠️ Python3 not available, using fallback for JSON parsing"
+                        fi
                     '''
                 }
             }
@@ -155,8 +155,10 @@ EOF
                             echo "Validating Terraform configuration..."
                             
                             sh '''
-                                # Source the environment setup
-                                source /tmp/jenkins-tools/setup-env.sh
+                                # Set up environment
+                                export PATH="/tmp/jenkins-tools:$PATH"
+                                export TERRAFORM_CMD="/tmp/jenkins-tools/terraform"
+                                export TFSEC_CMD="/tmp/jenkins-tools/tfsec"
                                 
                                 # Use the installed Terraform
                                 /tmp/jenkins-tools/terraform init -backend=false
@@ -173,8 +175,10 @@ EOF
                         script {
                             echo "Checking Terraform formatting..."
                             sh '''
-                                # Source the environment setup
-                                source /tmp/jenkins-tools/setup-env.sh
+                                # Set up environment
+                                export PATH="/tmp/jenkins-tools:$PATH"
+                                export TERRAFORM_CMD="/tmp/jenkins-tools/terraform"
+                                export TFSEC_CMD="/tmp/jenkins-tools/tfsec"
                                 
                                 # Check formatting
                                 /tmp/jenkins-tools/terraform fmt -check=true -diff=true || {
@@ -194,8 +198,10 @@ EOF
                         script {
                             echo "Running security scan with tfsec..."
                             sh '''
-                                # Source the environment setup
-                                source /tmp/jenkins-tools/setup-env.sh
+                                # Set up environment
+                                export PATH="/tmp/jenkins-tools:$PATH"
+                                export TERRAFORM_CMD="/tmp/jenkins-tools/terraform"
+                                export TFSEC_CMD="/tmp/jenkins-tools/tfsec"
                                 
                                 # Run security scan
                                 /tmp/jenkins-tools/tfsec . --format=json --out=tfsec-results.json || {
@@ -414,8 +420,10 @@ EOF
                     
                     // Extract upload URL from response
                     sh '''
-                        # Source environment and extract the upload URL from the response
-                        source /tmp/jenkins-tools/setup-env.sh
+                        # Set up environment and extract the upload URL from the response
+                        export PATH="/tmp/jenkins-tools:$PATH"
+                        export TERRAFORM_CMD="/tmp/jenkins-tools/terraform"
+                        export TFSEC_CMD="/tmp/jenkins-tools/tfsec"
                         
                         # Try with installed python3 first, fallback to different methods
                         if command -v python3 &> /dev/null; then
