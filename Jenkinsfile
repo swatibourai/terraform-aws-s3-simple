@@ -61,20 +61,20 @@ pipeline {
                         echo "Detected architecture: $ARCH, using $TERRAFORM_ARCH for Terraform and $TFSEC_ARCH for tfsec"
                         
                         # Install Terraform
-                        if ! command -v terraform &> /dev/null; then
+                        if [ ! -f "/tmp/jenkins-tools/terraform" ]; then
                             echo "Installing Terraform..."
                             cd /tmp/jenkins-tools
                             curl -fsSL https://releases.hashicorp.com/terraform/1.6.6/terraform_1.6.6_linux_${TERRAFORM_ARCH}.zip -o terraform.zip
-                            unzip -q terraform.zip
+                            unzip -o -q terraform.zip  # -o flag to overwrite without prompt
                             chmod +x terraform
                             ./terraform version
                         else
-                            echo "Terraform already available"
-                            terraform version
+                            echo "Terraform already installed in /tmp/jenkins-tools"
+                            /tmp/jenkins-tools/terraform version
                         fi
                         
                         # Install tfsec
-                        if ! command -v tfsec &> /dev/null; then
+                        if [ ! -f "/tmp/jenkins-tools/tfsec" ]; then
                             echo "Installing tfsec..."
                             cd /tmp/jenkins-tools
                             curl -fsSL https://github.com/aquasecurity/tfsec/releases/download/v1.28.14/tfsec_1.28.14_${TFSEC_ARCH}.tar.gz -o tfsec.tar.gz
@@ -82,27 +82,33 @@ pipeline {
                             chmod +x tfsec
                             ./tfsec --version
                         else
-                            echo "tfsec already available"
-                            tfsec --version
+                            echo "tfsec already installed in /tmp/jenkins-tools"
+                            /tmp/jenkins-tools/tfsec --version
                         fi
                         
                         # Check Python3 availability (don't try to install if no permission)
-                        if command -v python3 &> /dev/null; then
-                            echo "Python3 already available"
-                            python3 --version
-                        elif command -v python &> /dev/null; then
-                            echo "Python (v2/3) available, creating python3 alias"
-                            ln -sf $(which python) /tmp/jenkins-tools/python3
-                            /tmp/jenkins-tools/python3 --version
-                        else
-                            echo "⚠️ Python not found, but continuing - some features may be limited"
-                            echo "Creating a dummy python3 script for basic functionality"
-                            cat > /tmp/jenkins-tools/python3 << 'PYEOF'
+                        if [ ! -f "/tmp/jenkins-tools/python3" ]; then
+                            if command -v python3 &> /dev/null; then
+                                echo "Python3 system installation found"
+                                python3 --version
+                                # Create symlink for consistency
+                                ln -sf $(which python3) /tmp/jenkins-tools/python3
+                            elif command -v python &> /dev/null; then
+                                echo "Python (v2/3) available, creating python3 alias"
+                                ln -sf $(which python) /tmp/jenkins-tools/python3
+                                /tmp/jenkins-tools/python3 --version
+                            else
+                                echo "⚠️ Python not found, creating fallback script"
+                                cat > /tmp/jenkins-tools/python3 << 'PYEOF'
 #!/bin/sh
 echo "Python not available - using fallback"
 exit 0
 PYEOF
-                            chmod +x /tmp/jenkins-tools/python3
+                                chmod +x /tmp/jenkins-tools/python3
+                            fi
+                        else
+                            echo "Python3 already set up in /tmp/jenkins-tools"
+                            /tmp/jenkins-tools/python3 --version 2>/dev/null || echo "Python3 fallback script ready"
                         fi
                         
                         # Verify all tools are working
@@ -120,6 +126,14 @@ PYEOF
                         else
                             echo "⚠️ Python3 not available, using fallback for JSON parsing"
                         fi
+                        
+                        # Cleanup temporary files to save space
+                        cd /tmp/jenkins-tools
+                        rm -f terraform.zip tfsec.tar.gz 2>/dev/null || true
+                        
+                        echo "✅ Tool setup completed successfully"
+                        echo "Available tools:"
+                        ls -la /tmp/jenkins-tools/
                     '''
                 }
             }
@@ -490,10 +504,15 @@ PYEOF
                     
                     sh '''
                         # Check if the module version is now available
-                        curl -f \
+                        export PATH="/tmp/jenkins-tools:$PATH"
+                        
+                        RESPONSE=$(curl -f \
                           --header "Authorization: Bearer $TF_API_TOKEN" \
-                          https://app.terraform.io/api/v2/organizations/$ORG/registry-modules/private/$ORG/$MODULE_NAME/$MODULE_PROVIDER/versions \
-                          | python3 -c "
+                          https://app.terraform.io/api/v2/organizations/$ORG/registry-modules/private/$ORG/$MODULE_NAME/$MODULE_PROVIDER/versions)
+                        
+                        # Try different methods to parse JSON
+                        if command -v python3 &> /dev/null && python3 -c "import json" 2>/dev/null; then
+                            echo "$RESPONSE" | python3 -c "
 import sys, json
 data = json.load(sys.stdin)
 versions = [v['attributes']['version'] for v in data['data']]
@@ -504,6 +523,26 @@ else:
     print('ERROR: Version ${MODULE_VERSION} not found')
     sys.exit(1)
 "
+                        elif command -v jq &> /dev/null; then
+                            echo "Using jq for JSON parsing..."
+                            VERSIONS=$(echo "$RESPONSE" | jq -r '.data[].attributes.version')
+                            echo "Available versions: $VERSIONS"
+                            if echo "$VERSIONS" | grep -q "${MODULE_VERSION}"; then
+                                echo "SUCCESS: Version ${MODULE_VERSION} is available"
+                            else
+                                echo "ERROR: Version ${MODULE_VERSION} not found"
+                                exit 1
+                            fi
+                        else
+                            echo "⚠️ Limited JSON parsing capability - checking response manually"
+                            echo "Response: $RESPONSE"
+                            if echo "$RESPONSE" | grep -q "\"version\":\"${MODULE_VERSION}\""; then
+                                echo "SUCCESS: Version ${MODULE_VERSION} appears to be available"
+                            else
+                                echo "⚠️ Could not verify version ${MODULE_VERSION} - manual check recommended"
+                                echo "Please check Terraform Cloud Registry manually"
+                            fi
+                        fi
                     '''
                 }
             }
