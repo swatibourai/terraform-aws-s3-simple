@@ -145,12 +145,24 @@ pipeline {
                             mkdir -p "${ARTIFACTS_DIR}"
                             
                             # Try to get latest version from Terraform Cloud
-                            LATEST_VERSION=\$(curl -s -H "Authorization: Bearer ${TF_API_TOKEN}" \\
+                            echo "Fetching versions from Terraform Cloud..."
+                            curl -s -H "Authorization: Bearer ${TF_API_TOKEN}" \\
                               https://app.terraform.io/api/v2/organizations/${params.ORG}/registry-modules/private/${params.ORG}/${params.MODULE_NAME}/${params.MODULE_PROVIDER}/versions \\
-                              | grep -o '"version":"[^"]*"' | head -1 | cut -d'"' -f4)
+                              | tee "${ARTIFACTS_DIR}/tfc_versions.json"
                             
-                            if [ -z "\$LATEST_VERSION" ] || [ "\$LATEST_VERSION" = "null" ]; then
+                            # Extract the latest version more reliably
+                            LATEST_VERSION=\$(cat "${ARTIFACTS_DIR}/tfc_versions.json" | \\
+                              grep -o '"version":"[^"]*"' | \\
+                              sed 's/"version":"//g' | \\
+                              sed 's/"//g' | \\
+                              sort -V | \\
+                              tail -1)
+                            
+                            echo "Found version from TFC: '\$LATEST_VERSION'"
+                            
+                            if [ -z "\$LATEST_VERSION" ] || [ "\$LATEST_VERSION" = "null" ] || [ "\$LATEST_VERSION" = "" ]; then
                                 # No existing version, check git tags
+                                echo "No version found in TFC, checking git tags..."
                                 git fetch --tags 2>/dev/null || true
                                 LATEST_VERSION=\$(git tag -l "v*" | sort -V | tail -1 | sed 's/^v//')
                                 
@@ -164,7 +176,13 @@ pipeline {
                             fi
                         """, returnStdout: true).trim()
                         
-                        echo "Current version: ${currentVersion}"
+                        echo "Current version detected: '${currentVersion}'"
+                        
+                        // Validate version format
+                        if (!currentVersion.matches(/^\d+\.\d+\.\d+$/)) {
+                            echo "Invalid version format detected: '${currentVersion}', defaulting to 0.0.0"
+                            currentVersion = "0.0.0"
+                        }
                         
                         // Calculate next version
                         def versionParts = currentVersion.split('\\.')
@@ -172,24 +190,29 @@ pipeline {
                         def minor = versionParts[1] as Integer
                         def patch = versionParts[2] as Integer
                         
+                        echo "Parsed version: major=${major}, minor=${minor}, patch=${patch}"
+                        
                         switch(params.VERSION_TYPE) {
                             case 'major':
                                 major++
                                 minor = 0
                                 patch = 0
+                                echo "Incrementing major version: ${major-1}.${minor}.${patch} -> ${major}.${minor}.${patch}"
                                 break
                             case 'minor':
                                 minor++
                                 patch = 0
+                                echo "Incrementing minor version: ${major}.${minor-1}.${patch} -> ${major}.${minor}.${patch}"
                                 break
                             case 'patch':
                             default:
                                 patch++
+                                echo "Incrementing patch version: ${major}.${minor}.${patch-1} -> ${major}.${minor}.${patch}"
                                 break
                         }
                         
                         env.MODULE_VERSION = "${major}.${minor}.${patch}"
-                        echo "Next version (${params.VERSION_TYPE}): ${env.MODULE_VERSION}"
+                        echo "✅ Next version (${params.VERSION_TYPE}): ${env.MODULE_VERSION}"
                     }
                 }
             }
@@ -211,112 +234,10 @@ pipeline {
             }
         }
 
-        stage('Package Module') {
-            steps {
-                sh """#!/bin/bash
-                    echo "📦 Creating module package..."
-                    mkdir -p "${ARTIFACTS_DIR}/module"
-                    
-                    # Copy all .tf files with directory structure
-                    find . -name "*.tf" -not -path "./.terraform/*" -not -path "./artifacts/*" -not -path "./.git/*" -exec cp --parents {} "${ARTIFACTS_DIR}/module/" \\;
-                    
-                    # Copy documentation and examples
-                    find . -name "*.md" -not -path "./.terraform/*" -not -path "./artifacts/*" -not -path "./.git/*" -exec cp --parents {} "${ARTIFACTS_DIR}/module/" \\; 2>/dev/null || true
-                    
-                    # Copy directories if they exist
-                    for dir in examples tests modules; do
-                        if [ -d "\$dir" ]; then
-                            cp -r "\$dir" "${ARTIFACTS_DIR}/module/"
-                        fi
-                    done
-                    
-                    # Create package
-                    tar -czf "${ARTIFACTS_DIR}/module.tar.gz" -C "${ARTIFACTS_DIR}/module" .
-                    
-                    echo "Package contents:"
-                    tar -tzf "${ARTIFACTS_DIR}/module.tar.gz" | head -10
-                """
-            }
-        }
-
-        stage('Create Module in TFC') {
-            when { environment name: 'CREATE_MODULE', value: 'true' }
+        stage('Generate CHANGELOG') {
             steps {
                 script {
-                    echo "🆕 Creating new module in Terraform Cloud..."
-                    writeFile file: "${ARTIFACTS_DIR}/create-module.json", text: """
-{
-  "data": {
-    "type": "registry-modules",
-    "attributes": {
-      "name": "${params.MODULE_NAME}",
-      "provider": "${params.MODULE_PROVIDER}",
-      "registry-name": "${REGISTRY_NAME}",
-      "no-code": true
-    }
-  }
-}
-"""
-                }
-                sh """#!/bin/bash
-                    curl -s -f -H "Authorization: Bearer ${TF_API_TOKEN}" \\
-                         -H "Content-Type: application/vnd.api+json" \\
-                         -d @"${ARTIFACTS_DIR}/create-module.json" \\
-                         https://app.terraform.io/api/v2/organizations/${params.ORG}/registry-modules \\
-                         -o "${ARTIFACTS_DIR}/create_module_response.json"
-                    echo "✅ Module created successfully"
-                """
-            }
-        }
-
-        stage('Publish to Registry') {
-            steps {
-                script {
-                    echo "📤 Publishing version ${env.MODULE_VERSION} to registry..."
-                    writeFile file: "${ARTIFACTS_DIR}/create-version.json", text: """
-{
-  "data": {
-    "type": "registry-module-versions",
-    "attributes": {
-      "version": "${env.MODULE_VERSION}",
-      "commit-sha": "${GIT_COMMIT_SHA}"
-    }
-  }
-}
-"""
-                }
-                sh """#!/bin/bash
-                    # Create version
-                    curl -s -f -H "Authorization: Bearer ${TF_API_TOKEN}" \\
-                         -H "Content-Type: application/vnd.api+json" \\
-                         -d @"${ARTIFACTS_DIR}/create-version.json" \\
-                         https://app.terraform.io/api/v2/organizations/${params.ORG}/registry-modules/private/${params.ORG}/${params.MODULE_NAME}/${params.MODULE_PROVIDER}/versions \\
-                         -o "${ARTIFACTS_DIR}/version_response.json"
-
-                    # Extract upload URL
-                    UPLOAD_URL=\$(grep -o '"upload":"[^"]*"' "${ARTIFACTS_DIR}/version_response.json" | cut -d'"' -f4)
-                    
-                    if [ -z "\$UPLOAD_URL" ]; then
-                        echo "❌ Failed to get upload URL"
-                        cat "${ARTIFACTS_DIR}/version_response.json"
-                        exit 1
-                    fi
-
-                    echo "Uploading to: \$UPLOAD_URL"
-                    
-                    # Upload package
-                    curl -s -f -H "Content-Type: application/octet-stream" \\
-                         --request PUT --data-binary @"${ARTIFACTS_DIR}/module.tar.gz" "\$UPLOAD_URL"
-                    
-                    echo "✅ Module version ${env.MODULE_VERSION} published successfully"
-                """
-            }
-        }
-
-        stage('Update CHANGELOG') {
-            steps {
-                script {
-                    echo "📝 Updating CHANGELOG..."
+                    echo "📝 Generating CHANGELOG..."
                     
                     // Create or update CHANGELOG.md
                     def changelogExists = fileExists('CHANGELOG.md')
@@ -358,6 +279,133 @@ pipeline {
                     
                     echo "✅ CHANGELOG.md updated with version ${env.MODULE_VERSION}"
                 }
+            }
+        }
+
+        stage('Package Module') {
+            steps {
+                sh """#!/bin/bash
+                    echo "📦 Creating module package..."
+                    mkdir -p "${ARTIFACTS_DIR}/module"
+                    
+                    # Copy all .tf files with directory structure
+                    find . -name "*.tf" -not -path "./.terraform/*" -not -path "./artifacts/*" -not -path "./.git/*" -exec cp --parents {} "${ARTIFACTS_DIR}/module/" \\;
+                    
+                    # Copy essential documentation (README.md only, exclude CHANGELOG.md)
+                    find . -name "README.md" -not -path "./.terraform/*" -not -path "./artifacts/*" -not -path "./.git/*" -exec cp --parents {} "${ARTIFACTS_DIR}/module/" \\; 2>/dev/null || true
+                    
+                    # Copy directories if they exist
+                    for dir in examples tests modules; do
+                        if [ -d "\$dir" ]; then
+                            cp -r "\$dir" "${ARTIFACTS_DIR}/module/"
+                        fi
+                    done
+                    
+                    # Create package
+                    tar -czf "${ARTIFACTS_DIR}/module.tar.gz" -C "${ARTIFACTS_DIR}/module" .
+                    
+                    echo "📋 Module package contents (production files only):"
+                    tar -tzf "${ARTIFACTS_DIR}/module.tar.gz"
+                    
+                    echo "✅ Clean module package created (excludes CHANGELOG.md - available in Git repository)"
+                """
+            }
+        }
+
+        stage('Create Module in TFC') {
+            when { environment name: 'CREATE_MODULE', value: 'true' }
+            steps {
+                script {
+                    echo "🆕 Creating new module in Terraform Cloud..."
+                    writeFile file: "${ARTIFACTS_DIR}/create-module.json", text: """
+{
+  "data": {
+    "type": "registry-modules",
+    "attributes": {
+      "name": "${params.MODULE_NAME}",
+      "provider": "${params.MODULE_PROVIDER}",
+      "registry-name": "${REGISTRY_NAME}",
+      "no-code": true
+    }
+  }
+}
+"""
+                }
+                sh """#!/bin/bash
+                    curl -s -f -H "Authorization: Bearer ${TF_API_TOKEN}" \\
+                         -H "Content-Type: application/vnd.api+json" \\
+                         -d @"${ARTIFACTS_DIR}/create-module.json" \\
+                         https://app.terraform.io/api/v2/organizations/${params.ORG}/registry-modules \\
+                         -o "${ARTIFACTS_DIR}/create_module_response.json"
+                    echo "✅ Module created successfully"
+                """
+            }
+        }
+
+        stage('Publish to Registry') {
+            steps {
+                script {
+                    echo "📤 Publishing version ${env.MODULE_VERSION} to registry..."
+                    
+                    // Check if this version already exists
+                    def versionExists = sh(script: """#!/bin/bash
+                        curl -s -H "Authorization: Bearer ${TF_API_TOKEN}" \\
+                          https://app.terraform.io/api/v2/organizations/${params.ORG}/registry-modules/private/${params.ORG}/${params.MODULE_NAME}/${params.MODULE_PROVIDER}/versions \\
+                          | grep -q '"version":"${env.MODULE_VERSION}"'
+                    """, returnStatus: true)
+                    
+                    if (versionExists == 0) {
+                        error("❌ Version ${env.MODULE_VERSION} already exists in the registry! Please choose a different version or increment appropriately.")
+                    }
+                    
+                    echo "✅ Version ${env.MODULE_VERSION} is unique, proceeding with upload..."
+                    
+                    writeFile file: "${ARTIFACTS_DIR}/create-version.json", text: """
+{
+  "data": {
+    "type": "registry-module-versions",
+    "attributes": {
+      "version": "${env.MODULE_VERSION}",
+      "commit-sha": "${GIT_COMMIT_SHA}"
+    }
+  }
+}
+"""
+                }
+                sh """#!/bin/bash
+                    # Create version
+                    curl -s -f -H "Authorization: Bearer ${TF_API_TOKEN}" \\
+                         -H "Content-Type: application/vnd.api+json" \\
+                         -d @"${ARTIFACTS_DIR}/create-version.json" \\
+                         https://app.terraform.io/api/v2/organizations/${params.ORG}/registry-modules/private/${params.ORG}/${params.MODULE_NAME}/${params.MODULE_PROVIDER}/versions \\
+                         -o "${ARTIFACTS_DIR}/version_response.json"
+
+                    # Extract upload URL
+                    UPLOAD_URL=\$(grep -o '"upload":"[^"]*"' "${ARTIFACTS_DIR}/version_response.json" | cut -d'"' -f4)
+                    
+                    if [ -z "\$UPLOAD_URL" ]; then
+                        echo "❌ Failed to get upload URL"
+                        echo "Response content:"
+                        cat "${ARTIFACTS_DIR}/version_response.json"
+                        exit 1
+                    fi
+
+                    echo "Uploading to: \$UPLOAD_URL"
+                    
+                    # Upload package
+                    curl -s -f -H "Content-Type: application/octet-stream" \\
+                         --request PUT --data-binary @"${ARTIFACTS_DIR}/module.tar.gz" "\$UPLOAD_URL"
+                    
+                    echo "✅ Module version ${env.MODULE_VERSION} published successfully"
+                """
+            }
+        }
+
+        stage('Commit CHANGELOG to Git') {
+            steps {
+                script {
+                    echo "� Committing CHANGELOG to Git repository..."
+                }
                 
                 // Commit and tag the new version
                 sh """#!/bin/bash
@@ -368,7 +416,11 @@ pipeline {
                     git commit -m "chore: update CHANGELOG for version ${env.MODULE_VERSION}" || true
                     git tag -a "v${env.MODULE_VERSION}" -m "Release version ${env.MODULE_VERSION}"
                     
-                    echo "✅ Tagged version v${env.MODULE_VERSION}"
+                    # Push the changes back to the repository
+                    git push origin main || echo "Failed to push to main branch"
+                    git push origin "v${env.MODULE_VERSION}" || echo "Failed to push tag"
+                    
+                    echo "✅ CHANGELOG committed and tagged version v${env.MODULE_VERSION}"
                 """
             }
         }
