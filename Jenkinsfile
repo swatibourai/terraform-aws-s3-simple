@@ -90,21 +90,27 @@ pipeline {
                         # Basic secret scan - look for common patterns
                         echo "Scanning for potential secrets..."
                         
-                        # Check for AWS keys
-                        if grep -r "AKIA[0-9A-Z]\\{16\\}" . --exclude-dir=.git --exclude-dir=artifacts 2>/dev/null; then
+                        # Check for AWS keys (exclude Jenkinsfiles to avoid false positives)
+                        if grep -r "AKIA[0-9A-Z]\\{16\\}" . --exclude-dir=.git --exclude-dir=artifacts --exclude="*Jenkinsfile*" 2>/dev/null; then
                             echo "❌ Found potential AWS Access Key"
                             exit 1
                         fi
                         
-                        # Check for private keys
-                        if grep -r "BEGIN.*PRIVATE KEY" . --exclude-dir=.git --exclude-dir=artifacts 2>/dev/null; then
+                        # Check for private keys (exclude Jenkinsfiles to avoid false positives)
+                        if grep -r "BEGIN.*PRIVATE KEY" . --exclude-dir=.git --exclude-dir=artifacts --exclude="*Jenkinsfile*" 2>/dev/null; then
                             echo "❌ Found potential private key"
                             exit 1
                         fi
                         
-                        # Check for passwords in plain text
-                        if grep -ri "password.*=" . --include="*.tf" --include="*.tfvars" 2>/dev/null | grep -v "variable"; then
+                        # Check for passwords in plain text (only in Terraform files)
+                        if grep -ri "password.*=" . --include="*.tf" --include="*.tfvars" --exclude-dir=.git --exclude-dir=artifacts 2>/dev/null | grep -v "variable"; then
                             echo "❌ Found potential hardcoded password"
+                            exit 1
+                        fi
+                        
+                        # Check for other sensitive patterns
+                        if grep -ri "secret.*=" . --include="*.tf" --include="*.tfvars" --exclude-dir=.git --exclude-dir=artifacts 2>/dev/null | grep -v "variable" | grep -v "data"; then
+                            echo "❌ Found potential hardcoded secret"
                             exit 1
                         fi
                         
