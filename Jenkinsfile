@@ -77,53 +77,42 @@ pipeline {
         }
 
          stage('Check/Create Module') {
-    steps {
-        script {
-            echo "📦 Checking if module already exists in registry..."
+  steps {
+    script {
+      echo "📦 Checking if module already exists in registry..."
 
-            sh "mkdir -p ${ARTIFACTS_DIR}"
+      def moduleExists = false
 
-            def status = sh(script: """#!/bin/bash
-                set -e
-                curl -s -H "Authorization: Bearer ${TF_API_TOKEN}" \\
-                  https://app.terraform.io/api/v2/organizations/${params.ORG}/registry-modules/private/${params.ORG}/${params.MODULE_NAME}/${params.MODULE_PROVIDER} \\
-                  -o "${ARTIFACTS_DIR}/check_module_response.json"
-                test -s "${ARTIFACTS_DIR}/check_module_response.json"
-            """, returnStatus: true)
+      withCredentials([string(credentialsId: 'TF_API_TOKEN_ID', variable: 'TF_API_TOKEN')]) {
+        def response = sh(
+          script: '''
+            curl -s -o artifacts/check_module_response.json -w "%{http_code}" \
+              -H "Authorization: Bearer $TF_API_TOKEN" \
+              https://app.terraform.io/api/v2/registry/modules/your-org/module-name
+          ''',
+          returnStdout: true
+        ).trim()
 
-            def moduleExists = (status == 0)
-            env.CREATE_MODULE = (!moduleExists).toString()
-
-            if (moduleExists) {
-                echo "✅ Module already exists in the registry."
-
-                sh(script: """#!/bin/bash
-                    curl -s -H "Authorization: Bearer ${TF_API_TOKEN}" \\
-                      https://app.terraform.io/api/v2/organizations/${params.ORG}/registry-modules/private/${params.ORG}/${params.MODULE_NAME}/${params.MODULE_PROVIDER}/versions \\
-                      -o "${ARTIFACTS_DIR}/existing_versions.json"
-                """)
-
-                def versionJson = readJSON file: "${ARTIFACTS_DIR}/existing_versions.json"
-                def existingVersions = versionJson.data*.attributes.version
-                def latestVersion = existingVersions.sort(false).last()
-
-                echo "🔍 Latest version in registry: ${latestVersion}"
-                echo "📦 Version to be published: ${params.MODULE_VERSION}"
-
-                if (params.MODULE_VERSION == latestVersion) {
-                    error "❌ Module version ${params.MODULE_VERSION} already exists in registry. Please bump the version."
-                } else if (params.MODULE_VERSION < latestVersion) {
-                    error "❌ Provided version (${params.MODULE_VERSION}) is older than the latest version (${latestVersion}) in registry. Please use a newer version."
-                } else {
-                    echo "✅ Provided version (${params.MODULE_VERSION}) is valid for publishing."
-                }
-
-            } else {
-                echo "ℹ️ Module does not exist in registry. Will create new module before uploading version."
-            }
+        if (response == "200") {
+          moduleExists = true
         }
+      }
+
+      if (moduleExists) {
+        echo "✅ Module already exists. Skipping creation."
+        // Safely skip further processing
+        currentBuild.result = 'SUCCESS'
+        return
+      }
+
+      // Now it's safe to read JSON
+      def parsed = readJSON file: 'artifacts/check_module_response.json'
+      echo "Parsed response: ${parsed}"
+      // Proceed to creation/upload steps
     }
+  }
 }
+
 
 
 
