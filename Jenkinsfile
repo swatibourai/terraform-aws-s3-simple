@@ -145,24 +145,40 @@ pipeline {
                             mkdir -p "${ARTIFACTS_DIR}"
                             
                             # Try to get latest version from Terraform Cloud
-                            echo "Fetching versions from Terraform Cloud..."
+                            echo "🔍 Fetching versions from Terraform Cloud..."
                             curl -s -H "Authorization: Bearer ${TF_API_TOKEN}" \\
                               https://app.terraform.io/api/v2/organizations/${params.ORG}/registry-modules/private/${params.ORG}/${params.MODULE_NAME}/${params.MODULE_PROVIDER}/versions \\
-                              | tee "${ARTIFACTS_DIR}/tfc_versions.json"
+                              -o "${ARTIFACTS_DIR}/tfc_versions.json"
                             
-                            # Extract the latest version more reliably
-                            LATEST_VERSION=\$(cat "${ARTIFACTS_DIR}/tfc_versions.json" | \\
-                              grep -o '"version":"[^"]*"' | \\
-                              sed 's/"version":"//g' | \\
-                              sed 's/"//g' | \\
-                              sort -V | \\
-                              tail -1)
+                            echo "📄 Raw TFC API response:"
+                            cat "${ARTIFACTS_DIR}/tfc_versions.json"
+                            echo ""
                             
-                            echo "Found version from TFC: '\$LATEST_VERSION'"
+                            # Check if the response contains valid data
+                            if grep -q '"data"' "${ARTIFACTS_DIR}/tfc_versions.json"; then
+                                echo "✅ Valid API response received"
+                                
+                                # Extract versions and sort them properly
+                                VERSIONS=\$(cat "${ARTIFACTS_DIR}/tfc_versions.json" | \\
+                                  grep -o '"version":"[^"]*"' | \\
+                                  sed 's/"version":"//g' | \\
+                                  sed 's/"//g')
+                                
+                                echo "📋 All versions found:"
+                                echo "\$VERSIONS"
+                                
+                                # Get the latest version using proper semantic version sorting
+                                LATEST_VERSION=\$(echo "\$VERSIONS" | sort -V | tail -1)
+                                echo "🏆 Latest version: '\$LATEST_VERSION'"
+                                
+                            else
+                                echo "❌ Invalid API response or no versions found"
+                                LATEST_VERSION=""
+                            fi
                             
                             if [ -z "\$LATEST_VERSION" ] || [ "\$LATEST_VERSION" = "null" ] || [ "\$LATEST_VERSION" = "" ]; then
                                 # No existing version, check git tags
-                                echo "No version found in TFC, checking git tags..."
+                                echo "🔍 No version found in TFC, checking git tags..."
                                 git fetch --tags 2>/dev/null || true
                                 LATEST_VERSION=\$(git tag -l "v*" | sort -V | tail -1 | sed 's/^v//')
                                 
@@ -176,11 +192,11 @@ pipeline {
                             fi
                         """, returnStdout: true).trim()
                         
-                        echo "Current version detected: '${currentVersion}'"
+                        echo "🎯 Current version detected: '${currentVersion}'"
                         
                         // Validate version format
                         if (!currentVersion.matches(/^\d+\.\d+\.\d+$/)) {
-                            echo "Invalid version format detected: '${currentVersion}', defaulting to 0.0.0"
+                            echo "⚠️ Invalid version format detected: '${currentVersion}', defaulting to 0.0.0"
                             currentVersion = "0.0.0"
                         }
                         
@@ -190,29 +206,34 @@ pipeline {
                         def minor = versionParts[1] as Integer
                         def patch = versionParts[2] as Integer
                         
-                        echo "Parsed version: major=${major}, minor=${minor}, patch=${patch}"
+                        echo "🔧 Parsed version components: major=${major}, minor=${minor}, patch=${patch}"
+                        
+                        def oldVersion = "${major}.${minor}.${patch}"
                         
                         switch(params.VERSION_TYPE) {
                             case 'major':
                                 major++
                                 minor = 0
                                 patch = 0
-                                echo "Incrementing major version: ${major-1}.${minor}.${patch} -> ${major}.${minor}.${patch}"
                                 break
                             case 'minor':
                                 minor++
                                 patch = 0
-                                echo "Incrementing minor version: ${major}.${minor-1}.${patch} -> ${major}.${minor}.${patch}"
                                 break
                             case 'patch':
                             default:
                                 patch++
-                                echo "Incrementing patch version: ${major}.${minor}.${patch-1} -> ${major}.${minor}.${patch}"
                                 break
                         }
                         
                         env.MODULE_VERSION = "${major}.${minor}.${patch}"
-                        echo "✅ Next version (${params.VERSION_TYPE}): ${env.MODULE_VERSION}"
+                        echo "🚀 Version increment (${params.VERSION_TYPE}): ${oldVersion} → ${env.MODULE_VERSION}"
+                        echo "✅ Next version will be: ${env.MODULE_VERSION}"
+                        
+                        // Final validation - ensure we're not going backwards
+                        if (oldVersion != "0.0.0" && env.MODULE_VERSION == "0.0.1") {
+                            error("❌ Version detection failed! Detected current version '${oldVersion}' but calculated next version '${env.MODULE_VERSION}'. This suggests the TFC API call failed.")
+                        }
                     }
                 }
             }
