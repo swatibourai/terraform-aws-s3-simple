@@ -130,12 +130,12 @@ pipeline {
                         
                         # Check Python3 availability for JSON parsing
                         if [ ! -f "/tmp/jenkins-tools/python3" ]; then
-                            if command -v python3 &> /dev/null; then
+                            if python3 --version &> /dev/null; then
                                 echo "Python3 system installation found"
                                 python3 --version
                                 # Create symlink for consistency
                                 ln -sf $(which python3) /tmp/jenkins-tools/python3
-                            elif command -v python &> /dev/null; then
+                            elif python --version &> /dev/null; then
                                 echo "Python (v2/3) available, creating python3 alias"
                                 ln -sf $(which python) /tmp/jenkins-tools/python3
                                 /tmp/jenkins-tools/python3 --version
@@ -160,8 +160,8 @@ PYEOF
                         /tmp/jenkins-tools/terraform version
                         
                         # Test python3 availability
-                        if command -v python3 &> /dev/null; then
-                            python3 --version
+                        if /tmp/jenkins-tools/python3 --version &> /dev/null; then
+                            /tmp/jenkins-tools/python3 --version
                         else
                             echo "⚠️ Python3 not available, using fallback for JSON parsing"
                         fi
@@ -379,17 +379,12 @@ PYEOF
                     // Extract upload URL from response
                     sh '''
                         echo "Extracting upload URL from response..."
-                        export PATH="/tmp/jenkins-tools:$PATH"
                         
-                        # Try with installed python3 first, fallback to different methods
-                        if command -v python3 &> /dev/null && python3 -c "import json" 2>/dev/null; then
+                        # Try different methods to extract upload URL
+                        if /tmp/jenkins-tools/python3 -c "import json" 2>/dev/null; then
                             echo "Using Python3 for JSON parsing..."
                             UPLOAD_URL=$(cat ${ARTIFACTS_DIR}/version_response.json | \
-                              python3 -c "import sys, json; print(json.load(sys.stdin)['data']['links']['upload'])")
-                        elif command -v python &> /dev/null; then
-                            echo "Using Python for JSON parsing..."
-                            UPLOAD_URL=$(cat ${ARTIFACTS_DIR}/version_response.json | \
-                              python -c "import sys, json; print(json.load(sys.stdin)['data']['links']['upload'])")
+                              /tmp/jenkins-tools/python3 -c "import sys, json; print(json.load(sys.stdin)['data']['links']['upload'])")
                         elif command -v jq &> /dev/null; then
                             echo "Using jq for JSON parsing..."
                             UPLOAD_URL=$(cat ${ARTIFACTS_DIR}/version_response.json | jq -r '.data.links.upload')
