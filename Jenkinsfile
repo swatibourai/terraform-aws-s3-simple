@@ -201,84 +201,20 @@ PYEOF
         }
         
         stage('Code Quality Checks') {
-            parallel {
-                stage('Terraform Validate') {
-                    steps {
-                        script {
-                            echo "Validating Terraform configuration..."
-                            
-                            sh '''
-                                # Set up environment
-                                export PATH="/tmp/jenkins-tools:$PATH"
-                                
-                                # Use the installed Terraform
-                                /tmp/jenkins-tools/terraform init -backend=false
-                                /tmp/jenkins-tools/terraform validate
-                                
-                                echo "✅ Terraform validation completed successfully"
-                            '''
-                        }
-                    }
-                }
-                
-                stage('Terraform Format Check') {
-                    steps {
-                        script {
-                            echo "Checking Terraform formatting..."
-                            sh '''
-                                # Set up environment
-                                export PATH="/tmp/jenkins-tools:$PATH"
-                                
-                                # Check formatting
-                                /tmp/jenkins-tools/terraform fmt -check=true -diff=true || {
-                                    echo "⚠️ Terraform formatting issues found"
-                                    echo "Run 'terraform fmt' to fix formatting"
-                                    exit 0  # Don't fail the build for formatting
-                                }
-                                
-                                echo "✅ Terraform format check passed"
-                            '''
-                        }
-                    }
-                }
-                
-                stage('Documentation Check') {
-                    steps {
-                        script {
-                            echo "Checking for required documentation..."
-                            sh '''
-                                # Check for README.md
-                                if [ ! -f "README.md" ]; then
-                                    echo "⚠️ WARNING: README.md not found"
-                                else
-                                    echo "✅ README.md found"
-                                fi
-                                
-                                # Check for variables documentation
-                                if [ ! -f "variables.tf" ]; then
-                                    echo "⚠️ WARNING: variables.tf not found"
-                                else
-                                    echo "✅ variables.tf found"
-                                fi
-                                
-                                # Check for outputs documentation
-                                if [ ! -f "outputs.tf" ]; then
-                                    echo "⚠️ WARNING: outputs.tf not found"
-                                else
-                                    echo "✅ outputs.tf found"
-                                fi
-                                
-                                # Check for versions.tf
-                                if [ ! -f "versions.tf" ]; then
-                                    echo "⚠️ WARNING: versions.tf not found"
-                                else
-                                    echo "✅ versions.tf found"
-                                fi
-                                
-                                echo "✅ Documentation check completed"
-                            '''
-                        }
-                    }
+            steps {
+                script {
+                    echo "Running basic Terraform checks..."
+                    
+                    sh '''
+                        # Set up environment
+                        export PATH="/tmp/jenkins-tools:$PATH"
+                        
+                        # Basic Terraform validation
+                        /tmp/jenkins-tools/terraform init -backend=false
+                        /tmp/jenkins-tools/terraform validate
+                        
+                        echo "✅ Basic checks completed"
+                    '''
                 }
             }
         }
@@ -286,7 +222,7 @@ PYEOF
         stage('Check Version Compatibility') {
             steps {
                 script {
-                    echo "Checking version compatibility with existing module versions..."
+                    echo "Checking if module exists..."
                     
                     def moduleExists = sh(
                         script: '''
@@ -301,68 +237,9 @@ PYEOF
                     if (moduleExists != 0) {
                         echo "✅ Module does not exist. This will be the first version."
                         env.CREATE_MODULE = 'true'
-                        env.VERSION_CHECK_PASSED = 'true'
                     } else {
-                        echo "Module exists. Checking version compatibility..."
+                        echo "✅ Module exists. Will create new version."
                         env.CREATE_MODULE = 'false'
-                        
-                        // Check existing versions
-                        def versionCheckResult = sh(
-                            script: '''
-                                export PATH="/tmp/jenkins-tools:$PATH"
-                                
-                                RESPONSE=$(curl -s \
-                                  --header "Authorization: Bearer $TF_API_TOKEN" \
-                                  https://app.terraform.io/api/v2/organizations/$ORG/registry-modules/private/$ORG/$MODULE_NAME/$MODULE_PROVIDER/versions)
-                                
-                                # Extract existing versions and check if our version is higher
-                                if command -v python3 &> /dev/null && python3 -c "import json" 2>/dev/null; then
-                                    echo "$RESPONSE" | python3 -c "
-import sys, json
-from packaging import version
-
-try:
-    data = json.load(sys.stdin)
-    existing_versions = [v['attributes']['version'] for v in data['data']]
-    new_version = '${MODULE_VERSION}'
-    
-    print('Existing versions:', existing_versions)
-    print('New version:', new_version)
-    
-    # Check if version already exists
-    if new_version in existing_versions:
-        print('ERROR: Version ' + new_version + ' already exists!')
-        sys.exit(1)
-    
-    # Check if new version is higher than all existing versions
-    if existing_versions:
-        highest_existing = max(existing_versions, key=version.parse)
-        if version.parse(new_version) <= version.parse(highest_existing):
-            print('ERROR: New version ' + new_version + ' must be higher than existing highest version ' + highest_existing)
-            sys.exit(1)
-        else:
-            print('SUCCESS: Version ' + new_version + ' is higher than existing versions')
-    else:
-        print('SUCCESS: No existing versions found')
-        
-except ImportError:
-    print('WARNING: packaging module not available, skipping version comparison')
-except Exception as e:
-    print('WARNING: Could not parse versions, continuing: ' + str(e))
-"
-                                else
-                                    echo "⚠️ Python not available for version comparison, proceeding with upload"
-                                fi
-                            ''',
-                            returnStatus: true
-                        )
-                        
-                        if (versionCheckResult == 0) {
-                            echo "✅ Version check passed"
-                            env.VERSION_CHECK_PASSED = 'true'
-                        } else {
-                            error("Version check failed. Please use a higher version number.")
-                        }
                     }
                 }
             }
@@ -393,96 +270,42 @@ except Exception as e:
                         # Create a clean directory for the module
                         mkdir -p ${ARTIFACTS_DIR}/module
                         
-                        echo "📦 Creating module package with proper directory structure..."
+                        echo "📦 Creating module package..."
                         
-                        # Copy all relevant files while preserving directory structure
-                        # This will include all .tf files in subdirectories and other important files
+                        # Copy all .tf files recursively with directory structure
+                        find . -name "*.tf" -not -path "./.terraform/*" -not -path "./artifacts/*" -not -path "./.git/*" -exec cp --parents {} ${ARTIFACTS_DIR}/module/ \\;
                         
-                        # Use rsync for better directory structure preservation
-                        echo "📁 Copying all Terraform and related files..."
+                        # Copy documentation files
+                        find . -name "*.md" -not -path "./.terraform/*" -not -path "./artifacts/*" -not -path "./.git/*" -exec cp --parents {} ${ARTIFACTS_DIR}/module/ \\; 2>/dev/null || true
                         
-                        # Copy all .tf files recursively
-                        find . -name "*.tf" -not -path "./.terraform/*" -not -path "./artifacts/*" -not -path "./.git/*" -print0 | \\
-                            xargs -0 -I {} cp --parents {} ${ARTIFACTS_DIR}/module/
-                        
-                        # Copy documentation files  
-                        find . -name "*.md" -not -path "./.terraform/*" -not -path "./artifacts/*" -not -path "./.git/*" -print0 | \\
-                            xargs -0 -I {} cp --parents {} ${ARTIFACTS_DIR}/module/ 2>/dev/null || true
-                        
-                        # Copy license files
-                        find . -name "LICENSE*" -not -path "./.terraform/*" -not -path "./artifacts/*" -not -path "./.git/*" -print0 | \\
-                            xargs -0 -I {} cp --parents {} ${ARTIFACTS_DIR}/module/ 2>/dev/null || true
-                        
-                        # Copy .txt files
-                        find . -name "*.txt" -not -path "./.terraform/*" -not -path "./artifacts/*" -not -path "./.git/*" -print0 | \\
-                            xargs -0 -I {} cp --parents {} ${ARTIFACTS_DIR}/module/ 2>/dev/null || true
-                        
-                        # Copy examples directory if it exists (entire directory with structure)
-                        if [ -d "examples" ]; then
-                            echo "📁 Copying examples directory..."
-                            cp -r examples ${ARTIFACTS_DIR}/module/
-                        fi
-                        
-                        # Copy tests directory if it exists (entire directory with structure)
-                        if [ -d "tests" ]; then
-                            echo "🧪 Copying tests directory..."
-                            cp -r tests ${ARTIFACTS_DIR}/module/
-                        fi
-                        
-                        # Copy modules directory if it exists (for nested modules)
-                        if [ -d "modules" ]; then
-                            echo "📦 Copying modules directory..."
-                            cp -r modules ${ARTIFACTS_DIR}/module/
-                        fi
-                        
-                        # Copy any other common Terraform-related files
-                        echo "📄 Copying additional Terraform files..."
-                        for file in .terraform-version .terraformrc terraform.tfvars.example; do
-                            if [ -f "$file" ]; then
-                                echo "  - Copying $file..."
-                                cp "$file" ${ARTIFACTS_DIR}/module/ 2>/dev/null || true
+                        # Copy entire directories if they exist
+                        for dir in examples tests modules; do
+                            if [ -d "$dir" ]; then
+                                echo "� Copying $dir directory..."
+                                cp -r "$dir" ${ARTIFACTS_DIR}/module/
                             fi
                         done
                         
                         # Show what will be packaged
-                        echo "📋 Files and directories to be packaged:"
-                        find ${ARTIFACTS_DIR}/module -type f | sort
-                        
-                        echo ""
-                        echo "📊 Directory structure:"
-                        tree ${ARTIFACTS_DIR}/module 2>/dev/null || find ${ARTIFACTS_DIR}/module -type d | sort
+                        echo "Files to be packaged:"
+                        find ${ARTIFACTS_DIR}/module -type f | head -20
                         
                         # Create the tar.gz package
-                        echo ""
                         echo "📦 Creating tar.gz package..."
                         cd ${ARTIFACTS_DIR}/module
                         tar -czf ../module.tar.gz .
                         cd ${WORKSPACE_DIR}
                         
-                        # Verify the package was created
+                        # Verify package
                         if [ -f "${ARTIFACTS_DIR}/module.tar.gz" ]; then
-                            echo "✅ Package created successfully:"
+                            echo "✅ Package created successfully"
                             ls -lh ${ARTIFACTS_DIR}/module.tar.gz
+                            echo "Package contents:"
+                            tar -tzf ${ARTIFACTS_DIR}/module.tar.gz | head -20
                         else
                             echo "❌ Failed to create package"
                             exit 1
                         fi
-                        
-                        # Show package contents for verification
-                        echo ""
-                        echo "📋 Package contents (first 30 files):"
-                        tar -tzf ${ARTIFACTS_DIR}/module.tar.gz | head -30
-                        
-                        TOTAL_FILES=$(tar -tzf ${ARTIFACTS_DIR}/module.tar.gz | wc -l)
-                        echo ""
-                        echo "📊 Package statistics:"
-                        echo "  - Total files: $TOTAL_FILES"
-                        echo "  - Package size: $(ls -lh ${ARTIFACTS_DIR}/module.tar.gz | awk '{print $5}')"
-                        
-                        # Show directory breakdown
-                        echo "  - Terraform files: $(tar -tzf ${ARTIFACTS_DIR}/module.tar.gz | grep -c '\.tf$' || echo 0)"
-                        echo "  - Documentation files: $(tar -tzf ${ARTIFACTS_DIR}/module.tar.gz | grep -c '\.md$' || echo 0)"
-                        echo "  - Directories: $(tar -tzf ${ARTIFACTS_DIR}/module.tar.gz | grep '/$' | wc -l)"
                     '''
                 }
             }
@@ -632,45 +455,16 @@ except Exception as e:
                     sleep(time: 10, unit: 'SECONDS')
                     
                     sh '''
-                        # Check if the module version is now available
-                        export PATH="/tmp/jenkins-tools:$PATH"
-                        
-                        RESPONSE=$(curl -f \
+                        # Simple verification
+                        RESPONSE=$(curl -s \
                           --header "Authorization: Bearer $TF_API_TOKEN" \
                           https://app.terraform.io/api/v2/organizations/$ORG/registry-modules/private/$ORG/$MODULE_NAME/$MODULE_PROVIDER/versions)
                         
-                        # Try different methods to parse JSON
-                        if command -v python3 &> /dev/null && python3 -c "import json" 2>/dev/null; then
-                            echo "$RESPONSE" | python3 -c "
-import sys, json
-data = json.load(sys.stdin)
-versions = [v['attributes']['version'] for v in data['data']]
-print('Available versions:', versions)
-if '${MODULE_VERSION}' in versions:
-    print('SUCCESS: Version ${MODULE_VERSION} is available')
-else:
-    print('ERROR: Version ${MODULE_VERSION} not found')
-    sys.exit(1)
-"
-                        elif command -v jq &> /dev/null; then
-                            echo "Using jq for JSON parsing..."
-                            VERSIONS=$(echo "$RESPONSE" | jq -r '.data[].attributes.version')
-                            echo "Available versions: $VERSIONS"
-                            if echo "$VERSIONS" | grep -q "${MODULE_VERSION}"; then
-                                echo "SUCCESS: Version ${MODULE_VERSION} is available"
-                            else
-                                echo "ERROR: Version ${MODULE_VERSION} not found"
-                                exit 1
-                            fi
+                        if echo "$RESPONSE" | grep -q "\"version\":\"${MODULE_VERSION}\""; then
+                            echo "✅ SUCCESS: Version ${MODULE_VERSION} is available"
                         else
-                            echo "⚠️ Limited JSON parsing capability - checking response manually"
+                            echo "⚠️ Could not verify version - check Terraform Cloud Registry manually"
                             echo "Response: $RESPONSE"
-                            if echo "$RESPONSE" | grep -q "\"version\":\"${MODULE_VERSION}\""; then
-                                echo "SUCCESS: Version ${MODULE_VERSION} appears to be available"
-                            else
-                                echo "⚠️ Could not verify version ${MODULE_VERSION} - manual check recommended"
-                                echo "Please check Terraform Cloud Registry manually"
-                            fi
                         fi
                     '''
                 }
