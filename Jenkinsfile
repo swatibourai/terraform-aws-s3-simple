@@ -398,23 +398,24 @@ except Exception as e:
                         # Copy all relevant files while preserving directory structure
                         # This will include all .tf files in subdirectories and other important files
                         
-                        # Copy all Terraform files (*.tf) recursively
-                        echo "📁 Copying all .tf files (including subdirectories)..."
-                        find . -name "*.tf" -not -path "./.terraform/*" -not -path "./artifacts/*" -not -path "./.git/*" \
-                            -exec cp --parents {} ${ARTIFACTS_DIR}/module/ \;
+                        # Use rsync for better directory structure preservation
+                        echo "📁 Copying all Terraform and related files..."
                         
-                        # Copy documentation files
-                        echo "📝 Copying documentation files..."
-                        find . -name "*.md" -not -path "./.terraform/*" -not -path "./artifacts/*" -not -path "./.git/*" \
-                            -exec cp --parents {} ${ARTIFACTS_DIR}/module/ \; 2>/dev/null || true
+                        # Copy all .tf files recursively
+                        find . -name "*.tf" -not -path "./.terraform/*" -not -path "./artifacts/*" -not -path "./.git/*" -print0 | \\
+                            xargs -0 -I {} cp --parents {} ${ARTIFACTS_DIR}/module/
+                        
+                        # Copy documentation files  
+                        find . -name "*.md" -not -path "./.terraform/*" -not -path "./artifacts/*" -not -path "./.git/*" -print0 | \\
+                            xargs -0 -I {} cp --parents {} ${ARTIFACTS_DIR}/module/ 2>/dev/null || true
                         
                         # Copy license files
-                        find . -name "LICENSE*" -not -path "./.terraform/*" -not -path "./artifacts/*" -not -path "./.git/*" \
-                            -exec cp --parents {} ${ARTIFACTS_DIR}/module/ \; 2>/dev/null || true
+                        find . -name "LICENSE*" -not -path "./.terraform/*" -not -path "./artifacts/*" -not -path "./.git/*" -print0 | \\
+                            xargs -0 -I {} cp --parents {} ${ARTIFACTS_DIR}/module/ 2>/dev/null || true
                         
-                        # Copy any .txt files (like requirements, etc.)
-                        find . -name "*.txt" -not -path "./.terraform/*" -not -path "./artifacts/*" -not -path "./.git/*" \
-                            -exec cp --parents {} ${ARTIFACTS_DIR}/module/ \; 2>/dev/null || true
+                        # Copy .txt files
+                        find . -name "*.txt" -not -path "./.terraform/*" -not -path "./artifacts/*" -not -path "./.git/*" -print0 | \\
+                            xargs -0 -I {} cp --parents {} ${ARTIFACTS_DIR}/module/ 2>/dev/null || true
                         
                         # Copy examples directory if it exists (entire directory with structure)
                         if [ -d "examples" ]; then
@@ -435,10 +436,11 @@ except Exception as e:
                         fi
                         
                         # Copy any other common Terraform-related files
+                        echo "📄 Copying additional Terraform files..."
                         for file in .terraform-version .terraformrc terraform.tfvars.example; do
                             if [ -f "$file" ]; then
-                                echo "📄 Copying $file..."
-                                cp --parents "$file" ${ARTIFACTS_DIR}/module/ 2>/dev/null || true
+                                echo "  - Copying $file..."
+                                cp "$file" ${ARTIFACTS_DIR}/module/ 2>/dev/null || true
                             fi
                         done
                         
