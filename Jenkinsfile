@@ -26,6 +26,7 @@ pipeline {
         stage('Validate Parameters') {
             steps {
                 script {
+                    echo "Validating parameters..."
                     if (!params.MODULE_NAME?.trim()) error("Module name cannot be empty")
                     if (!params.MODULE_PROVIDER?.trim()) error("Module provider cannot be empty")
                     if (!params.MODULE_VERSION.matches(/^\d+\.\d+\.\d+$/)) error("Invalid version format")
@@ -36,6 +37,7 @@ pipeline {
         stage('Setup Tools') {
             steps {
                 sh '''
+                    set -x
                     mkdir -p /tmp/jenkins-tools
                     export PATH="/tmp/jenkins-tools:$PATH"
 
@@ -50,6 +52,7 @@ pipeline {
                     fi
 
                     ln -sf $(which python3 || which python || echo "/bin/false") /tmp/jenkins-tools/python3 || true
+                    set +x
                 '''
             }
         }
@@ -59,6 +62,7 @@ pipeline {
                 cleanWs()
                 checkout scm
                 script {
+                    echo "GIT_BRANCH: ${env.GIT_BRANCH}"
                     if (!env.GIT_BRANCH?.contains('main')) error("This pipeline only runs on 'main' branch")
                 }
             }
@@ -67,9 +71,11 @@ pipeline {
         stage('Terraform Validate') {
             steps {
                 sh '''
+                    set -x
                     export PATH="/tmp/jenkins-tools:$PATH"
                     terraform init -backend=false
                     terraform validate
+                    set +x
                 '''
             }
         }
@@ -77,33 +83,39 @@ pipeline {
         stage('Check/Create Module') {
             steps {
                 script {
+                    echo "Checking if module already exists in registry..."
                     def check = sh(script: """
-                        curl -s -H "Authorization: Bearer $TF_API_TOKEN" \
-                        https://app.terraform.io/api/v2/organizations/$ORG/registry-modules/private/$ORG/${params.MODULE_NAME}/${params.MODULE_PROVIDER} \
-                        | grep -q '"name"'
+                        set -x
+                        curl -v -s -H "Authorization: Bearer $TF_API_TOKEN" \\
+                        https://app.terraform.io/api/v2/organizations/$ORG/registry-modules/private/$ORG/${params.MODULE_NAME}/${params.MODULE_PROVIDER} \\
+                        | tee ${ARTIFACTS_DIR}/check_module_response.json | grep -q '"name"'
+                        set +x
                     """, returnStatus: true)
+                    echo "Module existence check return code: ${check}"
                     env.CREATE_MODULE = (check != 0).toString()
+                    echo "CREATE_MODULE flag is: ${env.CREATE_MODULE}"
                 }
             }
         }
 
         stage('Package Module') {
-                steps {
-                    sh """#!/bin/bash
-            set -e
-            mkdir -p "\${ARTIFACTS_DIR}/module"
-            find . -name "*.tf" -exec cp --parents {} "\${ARTIFACTS_DIR}/module/" \\;
-            tar -czf "\${ARTIFACTS_DIR}/module.tar.gz" -C "\${ARTIFACTS_DIR}/module" .
-            """
-                }
+            steps {
+                sh '''
+                    set -x
+                    mkdir -p "${ARTIFACTS_DIR}/module"
+                    find . -name "*.tf" -exec cp --parents {} "${ARTIFACTS_DIR}/module/" \\;
+                    tar -czf "${ARTIFACTS_DIR}/module.tar.gz" -C "${ARTIFACTS_DIR}/module" .
+                    set +x
+                '''
             }
-
-
+        }
 
         stage('Create Module in TFC') {
             when { environment name: 'CREATE_MODULE', value: 'true' }
             steps {
-                writeFile file: "${ARTIFACTS_DIR}/create-module.json", text: """
+                script {
+                    echo "Creating module JSON payload..."
+                    writeFile file: "${ARTIFACTS_DIR}/create-module.json", text: """
 {
   "data": {
     "type": "registry-modules",
@@ -116,11 +128,16 @@ pipeline {
   }
 }
 """
+                }
                 sh '''
-                    curl -f -H "Authorization: Bearer $TF_API_TOKEN" \
-                      -H "Content-Type: application/vnd.api+json" \
-                      -d @${ARTIFACTS_DIR}/create-module.json \
-                      https://app.terraform.io/api/v2/organizations/$ORG/registry-modules
+                    set -x
+                    echo "Sending create module request..."
+                    curl -v -f -H "Authorization: Bearer $TF_API_TOKEN" \
+                         -H "Content-Type: application/vnd.api+json" \
+                         -d @${ARTIFACTS_DIR}/create-module.json \
+                         https://app.terraform.io/api/v2/organizations/$ORG/registry-modules \
+                         | tee ${ARTIFACTS_DIR}/create_module_response.json
+                    set +x
                 '''
             }
         }
@@ -128,6 +145,7 @@ pipeline {
         stage('Create & Upload Version') {
             steps {
                 script {
+                    echo "Creating module version JSON..."
                     writeFile file: "${ARTIFACTS_DIR}/create-version.json", text: """
 {
   "data": {
@@ -141,16 +159,24 @@ pipeline {
 """
                 }
                 sh '''
-                    curl -f -H "Authorization: Bearer $TF_API_TOKEN" \
-                      -H "Content-Type: application/vnd.api+json" \
-                      -d @${ARTIFACTS_DIR}/create-version.json \
-                      https://app.terraform.io/api/v2/organizations/$ORG/registry-modules/private/$ORG/${params.MODULE_NAME}/${params.MODULE_PROVIDER}/versions \
-                      -o ${ARTIFACTS_DIR}/version_response.json
+                    set -x
+                    echo "Sending create version request..."
+                    curl -v -f -H "Authorization: Bearer $TF_API_TOKEN" \
+                         -H "Content-Type: application/vnd.api+json" \
+                         -d @${ARTIFACTS_DIR}/create-version.json \
+                         https://app.terraform.io/api/v2/organizations/$ORG/registry-modules/private/$ORG/${params.MODULE_NAME}/${params.MODULE_PROVIDER}/versions \
+                         -o ${ARTIFACTS_DIR}/version_response.json
 
+                    echo "Extracting upload URL..."
+                    cat ${ARTIFACTS_DIR}/version_response.json
                     UPLOAD_URL=$(grep -o '"upload":"[^"]*"' ${ARTIFACTS_DIR}/version_response.json | cut -d'"' -f4)
-                    curl -f -H "Authorization: Bearer $TF_API_TOKEN" \
-                      -H "Content-Type: application/octet-stream" \
-                      --request PUT --data-binary @${ARTIFACTS_DIR}/module.tar.gz "$UPLOAD_URL"
+                    echo "UPLOAD_URL: $UPLOAD_URL"
+
+                    echo "Uploading module tarball..."
+                    curl -v -f -H "Authorization: Bearer $TF_API_TOKEN" \
+                         -H "Content-Type: application/octet-stream" \
+                         --request PUT --data-binary @${ARTIFACTS_DIR}/module.tar.gz "$UPLOAD_URL"
+                    set +x
                 '''
             }
         }
@@ -165,7 +191,7 @@ pipeline {
             echo "✅ Module ${params.MODULE_NAME} version ${params.MODULE_VERSION} uploaded to Terraform Cloud"
         }
         failure {
-            echo "❌ Failed to upload module ${params.MODULE_NAME}"
+            echo "❌ Failed to upload module ${params.MODULE_NAME}. Check artifacts and logs for details."
         }
     }
 }
