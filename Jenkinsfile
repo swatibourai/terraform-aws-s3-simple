@@ -155,8 +155,9 @@ pipeline {
         }
 
         stage('Create Module in TFC') {
-            when { environment name: 'CREATE_MODULE', value: 'true' }
+                 when { environment name: 'CREATE_MODULE', value: 'true' }
             steps {
+                echo "🚀 Creating module ${params.MODULE_NAME} in Terraform Cloud..."
                 script {
                     writeFile file: "${ARTIFACTS_DIR}/create-module.json", text: """
 {
@@ -183,7 +184,9 @@ pipeline {
         }
 
         stage('Create & Upload Version') {
+             when { environment name: 'SKIP_VERSION_UPLOAD', value: 'false' }
             steps {
+                echo "🚀 Creating and uploading version ${params.MODULE_VERSION}..."
                 script {
                     writeFile file: "${ARTIFACTS_DIR}/create-version.json", text: """
 {
