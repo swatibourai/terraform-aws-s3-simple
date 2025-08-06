@@ -130,27 +130,26 @@ pipeline {
                         
                         # Check Python3 availability for JSON parsing
                         if [ ! -f "/tmp/jenkins-tools/python3" ]; then
-                            if python3 --version &> /dev/null; then
+                            if command -v python3 >/dev/null 2>&1; then
                                 echo "Python3 system installation found"
-                                python3 --version
+                                python3 --version 2>/dev/null || echo "Python3 found but version check failed"
                                 # Create symlink for consistency
                                 ln -sf $(which python3) /tmp/jenkins-tools/python3
-                            elif python --version &> /dev/null; then
+                            elif command -v python >/dev/null 2>&1; then
                                 echo "Python (v2/3) available, creating python3 alias"
                                 ln -sf $(which python) /tmp/jenkins-tools/python3
-                                /tmp/jenkins-tools/python3 --version
+                                /tmp/jenkins-tools/python3 --version 2>/dev/null || echo "Python alias created"
                             else
                                 echo "⚠️ Python not found, creating fallback script"
                                 cat > /tmp/jenkins-tools/python3 << 'PYEOF'
 #!/bin/sh
-echo "Python not available - using fallback"
-exit 0
+echo "ERROR: Python not available for JSON parsing" >&2
+exit 1
 PYEOF
                                 chmod +x /tmp/jenkins-tools/python3
                             fi
                         else
                             echo "Python3 already set up in /tmp/jenkins-tools"
-                            /tmp/jenkins-tools/python3 --version 2>/dev/null || echo "Python3 fallback script ready"
                         fi
                         
                         # Verify Terraform is working
@@ -381,13 +380,13 @@ PYEOF
                         echo "Extracting upload URL from response..."
                         
                         # Try different methods to extract upload URL
-                        if /tmp/jenkins-tools/python3 -c "import json" 2>/dev/null; then
+                        if /tmp/jenkins-tools/python3 -c "import json; import sys" 2>/dev/null; then
                             echo "Using Python3 for JSON parsing..."
                             UPLOAD_URL=$(cat ${ARTIFACTS_DIR}/version_response.json | \
-                              /tmp/jenkins-tools/python3 -c "import sys, json; print(json.load(sys.stdin)['data']['links']['upload'])")
-                        elif command -v jq &> /dev/null; then
+                              /tmp/jenkins-tools/python3 -c "import sys, json; print(json.load(sys.stdin)['data']['links']['upload'])" 2>/dev/null)
+                        elif command -v jq >/dev/null 2>&1; then
                             echo "Using jq for JSON parsing..."
-                            UPLOAD_URL=$(cat ${ARTIFACTS_DIR}/version_response.json | jq -r '.data.links.upload')
+                            UPLOAD_URL=$(cat ${ARTIFACTS_DIR}/version_response.json | jq -r '.data.links.upload' 2>/dev/null)
                         else
                             echo "Using grep fallback for URL extraction..."
                             # Simple grep fallback (less reliable)
