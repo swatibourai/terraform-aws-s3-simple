@@ -76,20 +76,73 @@ pipeline {
             }
         }
 
-        stage('Check/Create Module') {
+               stage('Check/Create Module') {
             steps {
                 script {
-                    echo "Checking if module already exists in registry..."
-                    def check = sh(script: """#!/bin/bash
+                    echo "📦 Checking if module and version already exist in registry..."
+
+                    sh """#!/bin/bash
                         mkdir -p "${ARTIFACTS_DIR}"
                         curl -s -H "Authorization: Bearer ${TF_API_TOKEN}" \\
                           https://app.terraform.io/api/v2/organizations/${params.ORG}/registry-modules/private/${params.ORG}/${params.MODULE_NAME}/${params.MODULE_PROVIDER} \\
-                          | tee "${ARTIFACTS_DIR}/check_module_response.json" | grep -q '"name"'
-                    """, returnStatus: true)
-                    env.CREATE_MODULE = (check != 0).toString()
+                          -o "${ARTIFACTS_DIR}/check_module_response.json"
+                    """
+
+                    def moduleData = readJSON file: "${ARTIFACTS_DIR}/check_module_response.json"
+
+                    if (moduleData?.errors) {
+                        echo "ℹ️ Module does not exist yet. Proceeding to create it."
+                        env.CREATE_MODULE = 'true'
+                        env.SKIP_VERSION_UPLOAD = 'false'
+                    } else {
+                        echo "✅ Module already exists."
+
+                        // Check if version already exists
+                        sh """#!/bin/bash
+                            curl -s -H "Authorization: Bearer ${TF_API_TOKEN}" \\
+                              https://app.terraform.io/api/v2/organizations/${params.ORG}/registry-modules/private/${params.ORG}/${params.MODULE_NAME}/${params.MODULE_PROVIDER}/versions \\
+                              -o "${ARTIFACTS_DIR}/check_versions_response.json"
+                        """
+
+                        def versionData = readJSON file: "${ARTIFACTS_DIR}/check_versions_response.json"
+                        def existingVersions = versionData?.data.collect { it.attributes.version }
+
+                        echo "📃 Existing versions in registry: ${existingVersions.join(', ')}"
+
+                        if (existingVersions.contains(params.MODULE_VERSION)) {
+                            echo "⛔ Module version ${params.MODULE_VERSION} already exists. Skipping upload."
+                            env.SKIP_VERSION_UPLOAD = 'true'
+                        } else {
+                            // Check if any existing version is greater than the current version
+                            def versionCompare = { a, b ->
+                                def va = a.tokenize('.').collect { it.toInteger() }
+                                def vb = b.tokenize('.').collect { it.toInteger() }
+                                for (int i = 0; i < Math.max(va.size(), vb.size()); i++) {
+                                    int partA = i < va.size() ? va[i] : 0
+                                    int partB = i < vb.size() ? vb[i] : 0
+                                    if (partA != partB) return partA <=> partB
+                                }
+                                return 0
+                            }
+
+                            def higherVersions = existingVersions.findAll {
+                                versionCompare(it, params.MODULE_VERSION) > 0
+                            }
+
+                            if (!higherVersions.isEmpty()) {
+                                echo "⚠️ Registry already contains newer version(s): ${higherVersions.join(', ')}"
+                            }
+
+                            echo "📦 Proceeding to create version ${params.MODULE_VERSION}"
+                            env.SKIP_VERSION_UPLOAD = 'false'
+                        }
+
+                        env.CREATE_MODULE = 'false'
+                    }
                 }
             }
         }
+
 
         stage('Package Module') {
             steps {
