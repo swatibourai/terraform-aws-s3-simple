@@ -9,7 +9,7 @@ pipeline {
     }
 
     environment {
-        TF_API_TOKEN = credentials('terraform-cloud-api-token') // Set once here
+        TF_API_TOKEN = credentials('terraform-cloud-api-token')
         REGISTRY_NAME = 'private'
         GIT_COMMIT_SHA = "${env.GIT_COMMIT}"
         WORKSPACE_DIR = "${env.WORKSPACE}"
@@ -79,32 +79,14 @@ pipeline {
         stage('Check/Create Module') {
             steps {
                 script {
-                    echo "📦 Checking if module already exists in registry..."
-
-                    def moduleExists = false
-
-                    def responseCode = sh(
-                        script: """
-                            mkdir -p artifacts
-                            curl -s -o artifacts/check_module_response.json -w "%{http_code}" \\
-                              -H "Authorization: Bearer ${TF_API_TOKEN}" \\
-                              https://app.terraform.io/api/v2/registry/modules/${params.ORG}/${params.MODULE_NAME}/${params.MODULE_PROVIDER}
-                        """,
-                        returnStdout: true
-                    ).trim()
-
-                    if (responseCode == "200") {
-                        moduleExists = true
-                        echo "✅ Module already exists. Skipping creation."
-                        currentBuild.result = 'SUCCESS'
-                        return
-                    } else {
-                        echo "ℹ️ Module does not exist yet. Proceeding to creation."
-                        if (fileExists('artifacts/check_module_response.json')) {
-                            def parsed = readJSON file: 'artifacts/check_module_response.json'
-                            echo "Module check response: ${parsed}"
-                        }
-                    }
+                    echo "Checking if module already exists in registry..."
+                    def check = sh(script: """#!/bin/bash
+                        mkdir -p "${ARTIFACTS_DIR}"
+                        curl -s -H "Authorization: Bearer ${TF_API_TOKEN}" \\
+                          https://app.terraform.io/api/v2/organizations/${params.ORG}/registry-modules/private/${params.ORG}/${params.MODULE_NAME}/${params.MODULE_PROVIDER} \\
+                          | tee "${ARTIFACTS_DIR}/check_module_response.json" | grep -q '"name"'
+                    """, returnStatus: true)
+                    env.CREATE_MODULE = (check != 0).toString()
                 }
             }
         }
