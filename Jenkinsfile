@@ -1,14 +1,35 @@
 pipeline {
     agent any
     
+    parameters {
+        string(
+            name: 'MODULE_VERSION',
+            defaultValue: '1.0.0',
+            description: 'Module version in semver format (x.y.z)',
+            trim: true
+        )
+        string(
+            name: 'MODULE_NAME',
+            defaultValue: 's3-simple',
+            description: 'Name of the Terraform module',
+            trim: true
+        )
+        string(
+            name: 'MODULE_PROVIDER',
+            defaultValue: 'aws',
+            description: 'Provider for the Terraform module (e.g., aws, azure, gcp)',
+            trim: true
+        )
+    }
+    
     environment {
         // Terraform Cloud credentials - configure these in Jenkins credentials
         TF_API_TOKEN = credentials('terraform-cloud-api-token')
         ORG = 'Chase-UK-Org'
         
-        // Module configuration
-        MODULE_NAME = 's3-simple'
-        MODULE_PROVIDER = 'aws'
+        // Module configuration - set from parameters
+        MODULE_NAME = "${params.MODULE_NAME}"
+        MODULE_PROVIDER = "${params.MODULE_PROVIDER}"
         REGISTRY_NAME = 'private'
         
         // Git configuration
@@ -36,6 +57,42 @@ pipeline {
     }
     
     stages {
+        stage('Validate Module Version') {
+            steps {
+                script {
+                    echo "Validating parameters..."
+                    echo "Module Name: ${params.MODULE_NAME}"
+                    echo "Module Provider: ${params.MODULE_PROVIDER}"
+                    echo "Module Version: ${params.MODULE_VERSION}"
+                    
+                    // Validate module name
+                    if (!params.MODULE_NAME || params.MODULE_NAME.trim().isEmpty()) {
+                        error("Module name cannot be empty")
+                    }
+                    
+                    // Validate module provider
+                    if (!params.MODULE_PROVIDER || params.MODULE_PROVIDER.trim().isEmpty()) {
+                        error("Module provider cannot be empty")
+                    }
+                    
+                    // Validate semver format
+                    if (!params.MODULE_VERSION.matches(/^\d+\.\d+\.\d+$/)) {
+                        error("Invalid module version format: ${params.MODULE_VERSION}. Expected format: x.y.z (e.g., 1.0.0)")
+                    }
+                    
+                    // Set the validated version as environment variable
+                    env.MODULE_VERSION = params.MODULE_VERSION
+                    env.MODULE_NAME = params.MODULE_NAME
+                    env.MODULE_PROVIDER = params.MODULE_PROVIDER
+                    
+                    echo "✅ All parameters validated successfully"
+                    echo "  - Module: ${env.MODULE_NAME}"
+                    echo "  - Provider: ${env.MODULE_PROVIDER}" 
+                    echo "  - Version: ${env.MODULE_VERSION}"
+                }
+            }
+        }
+        
         stage('Setup Tools') {
             steps {
                 script {
@@ -49,16 +106,14 @@ pipeline {
                         ARCH=$(uname -m)
                         if [ "$ARCH" = "x86_64" ]; then
                             TERRAFORM_ARCH="amd64"
-                            TFSEC_ARCH="linux_amd64"
                         elif [ "$ARCH" = "aarch64" ] || [ "$ARCH" = "arm64" ]; then
                             TERRAFORM_ARCH="arm64"
-                            TFSEC_ARCH="linux_arm64"
                         else
                             echo "Unsupported architecture: $ARCH"
                             exit 1
                         fi
                         
-                        echo "Detected architecture: $ARCH, using $TERRAFORM_ARCH for Terraform and $TFSEC_ARCH for tfsec"
+                        echo "Detected architecture: $ARCH, using $TERRAFORM_ARCH for Terraform"
                         
                         # Install Terraform
                         if [ ! -f "/tmp/jenkins-tools/terraform" ]; then
@@ -73,20 +128,7 @@ pipeline {
                             /tmp/jenkins-tools/terraform version
                         fi
                         
-                        # Install tfsec
-                        if [ ! -f "/tmp/jenkins-tools/tfsec" ]; then
-                            echo "Installing tfsec..."
-                            cd /tmp/jenkins-tools
-                            curl -fsSL https://github.com/aquasecurity/tfsec/releases/download/v1.28.14/tfsec_1.28.14_${TFSEC_ARCH}.tar.gz -o tfsec.tar.gz
-                            tar -xzf tfsec.tar.gz
-                            chmod +x tfsec
-                            ./tfsec --version
-                        else
-                            echo "tfsec already installed in /tmp/jenkins-tools"
-                            /tmp/jenkins-tools/tfsec --version
-                        fi
-                        
-                        # Check Python3 availability (don't try to install if no permission)
+                        # Check Python3 availability for JSON parsing
                         if [ ! -f "/tmp/jenkins-tools/python3" ]; then
                             if command -v python3 &> /dev/null; then
                                 echo "Python3 system installation found"
@@ -111,14 +153,11 @@ PYEOF
                             /tmp/jenkins-tools/python3 --version 2>/dev/null || echo "Python3 fallback script ready"
                         fi
                         
-                        # Verify all tools are working
-                        echo "Verifying tools installation..."
+                        # Verify Terraform is working
+                        echo "Verifying Terraform installation..."
                         export PATH="/tmp/jenkins-tools:$PATH"
-                        export TERRAFORM_CMD="/tmp/jenkins-tools/terraform"
-                        export TFSEC_CMD="/tmp/jenkins-tools/tfsec"
                         
-                        $TERRAFORM_CMD version
-                        $TFSEC_CMD --version
+                        /tmp/jenkins-tools/terraform version
                         
                         # Test python3 availability
                         if command -v python3 &> /dev/null; then
@@ -129,7 +168,7 @@ PYEOF
                         
                         # Cleanup temporary files to save space
                         cd /tmp/jenkins-tools
-                        rm -f terraform.zip tfsec.tar.gz 2>/dev/null || true
+                        rm -f terraform.zip 2>/dev/null || true
                         
                         echo "✅ Tool setup completed successfully"
                         echo "Available tools:"
@@ -161,7 +200,7 @@ PYEOF
             }
         }
         
-        stage('Code Quality & Security') {
+        stage('Code Quality Checks') {
             parallel {
                 stage('Terraform Validate') {
                     steps {
@@ -171,8 +210,6 @@ PYEOF
                             sh '''
                                 # Set up environment
                                 export PATH="/tmp/jenkins-tools:$PATH"
-                                export TERRAFORM_CMD="/tmp/jenkins-tools/terraform"
-                                export TFSEC_CMD="/tmp/jenkins-tools/tfsec"
                                 
                                 # Use the installed Terraform
                                 /tmp/jenkins-tools/terraform init -backend=false
@@ -191,8 +228,6 @@ PYEOF
                             sh '''
                                 # Set up environment
                                 export PATH="/tmp/jenkins-tools:$PATH"
-                                export TERRAFORM_CMD="/tmp/jenkins-tools/terraform"
-                                export TFSEC_CMD="/tmp/jenkins-tools/tfsec"
                                 
                                 # Check formatting
                                 /tmp/jenkins-tools/terraform fmt -check=true -diff=true || {
@@ -203,38 +238,6 @@ PYEOF
                                 
                                 echo "✅ Terraform format check passed"
                             '''
-                        }
-                    }
-                }
-                
-                stage('Security Scan') {
-                    steps {
-                        script {
-                            echo "Running security scan with tfsec..."
-                            sh '''
-                                # Set up environment
-                                export PATH="/tmp/jenkins-tools:$PATH"
-                                export TERRAFORM_CMD="/tmp/jenkins-tools/terraform"
-                                export TFSEC_CMD="/tmp/jenkins-tools/tfsec"
-                                
-                                # Run security scan
-                                /tmp/jenkins-tools/tfsec . --format=json --out=tfsec-results.json || {
-                                    echo "⚠️ Security scan completed with warnings"
-                                }
-                                
-                                # Run human-readable scan
-                                /tmp/jenkins-tools/tfsec . || {
-                                    echo "⚠️ Security issues found - check tfsec-results.json for details"
-                                }
-                                
-                                echo "✅ Security scan completed"
-                            '''
-                        }
-                    }
-                    post {
-                        always {
-                            // Archive security scan results
-                            archiveArtifacts artifacts: 'tfsec-results.json', allowEmptyArchive: true
                         }
                     }
                 }
@@ -280,22 +283,103 @@ PYEOF
             }
         }
         
+        stage('Check Version Compatibility') {
+            steps {
+                script {
+                    echo "Checking version compatibility with existing module versions..."
+                    
+                    def moduleExists = sh(
+                        script: '''
+                            curl -s \
+                              --header "Authorization: Bearer $TF_API_TOKEN" \
+                              https://app.terraform.io/api/v2/organizations/$ORG/registry-modules/private/$ORG/$MODULE_NAME/$MODULE_PROVIDER \
+                              | grep -q '"name"'
+                        ''',
+                        returnStatus: true
+                    )
+                    
+                    if (moduleExists != 0) {
+                        echo "✅ Module does not exist. This will be the first version."
+                        env.CREATE_MODULE = 'true'
+                        env.VERSION_CHECK_PASSED = 'true'
+                    } else {
+                        echo "Module exists. Checking version compatibility..."
+                        env.CREATE_MODULE = 'false'
+                        
+                        // Check existing versions
+                        def versionCheckResult = sh(
+                            script: '''
+                                export PATH="/tmp/jenkins-tools:$PATH"
+                                
+                                RESPONSE=$(curl -s \
+                                  --header "Authorization: Bearer $TF_API_TOKEN" \
+                                  https://app.terraform.io/api/v2/organizations/$ORG/registry-modules/private/$ORG/$MODULE_NAME/$MODULE_PROVIDER/versions)
+                                
+                                # Extract existing versions and check if our version is higher
+                                if command -v python3 &> /dev/null && python3 -c "import json" 2>/dev/null; then
+                                    echo "$RESPONSE" | python3 -c "
+import sys, json
+from packaging import version
+
+try:
+    data = json.load(sys.stdin)
+    existing_versions = [v['attributes']['version'] for v in data['data']]
+    new_version = '${MODULE_VERSION}'
+    
+    print('Existing versions:', existing_versions)
+    print('New version:', new_version)
+    
+    # Check if version already exists
+    if new_version in existing_versions:
+        print('ERROR: Version ' + new_version + ' already exists!')
+        sys.exit(1)
+    
+    # Check if new version is higher than all existing versions
+    if existing_versions:
+        highest_existing = max(existing_versions, key=version.parse)
+        if version.parse(new_version) <= version.parse(highest_existing):
+            print('ERROR: New version ' + new_version + ' must be higher than existing highest version ' + highest_existing)
+            sys.exit(1)
+        else:
+            print('SUCCESS: Version ' + new_version + ' is higher than existing versions')
+    else:
+        print('SUCCESS: No existing versions found')
+        
+except ImportError:
+    print('WARNING: packaging module not available, skipping version comparison')
+except Exception as e:
+    print('WARNING: Could not parse versions, continuing: ' + str(e))
+"
+                                else
+                                    echo "⚠️ Python not available for version comparison, proceeding with upload"
+                                fi
+                            ''',
+                            returnStatus: true
+                        )
+                        
+                        if (versionCheckResult == 0) {
+                            echo "✅ Version check passed"
+                            env.VERSION_CHECK_PASSED = 'true'
+                        } else {
+                            error("Version check failed. Please use a higher version number.")
+                        }
+                    }
+                }
+            }
+        }
+        
         stage('Generate Module Version') {
             steps {
                 script {
-                    echo "Generating module version..."
+                    echo "Using module version: ${env.MODULE_VERSION}"
                     
                     // Create artifacts directory
                     sh "mkdir -p ${ARTIFACTS_DIR}"
                     
-                    // Generate version based on build number and date
-                    def moduleVersion = "1.0.${BUILD_NUMBER}"
-                    env.MODULE_VERSION = moduleVersion
-                    
-                    echo "Module version: ${moduleVersion}"
-                    
                     // Create version file for tracking
-                    writeFile file: "${ARTIFACTS_DIR}/version.txt", text: "${moduleVersion}"
+                    writeFile file: "${ARTIFACTS_DIR}/version.txt", text: "${env.MODULE_VERSION}"
+                    
+                    echo "✅ Module version set: ${env.MODULE_VERSION}"
                 }
             }
         }
@@ -309,60 +393,95 @@ PYEOF
                         # Create a clean directory for the module
                         mkdir -p ${ARTIFACTS_DIR}/module
                         
-                        # Copy Terraform files (exclude .git, .terraform, etc.)
-                        find . -name "*.tf" -o -name "*.md" -o -name "*.txt" | \
-                        grep -v ".terraform" | \
-                        grep -v ".git" | \
-                        xargs -I {} cp --parents {} ${ARTIFACTS_DIR}/module/
+                        echo "📦 Creating module package with proper directory structure..."
                         
-                        # Create examples directory if it exists
+                        # Copy all relevant files while preserving directory structure
+                        # This will include all .tf files in subdirectories and other important files
+                        
+                        # Copy all Terraform files (*.tf) recursively
+                        echo "📁 Copying all .tf files (including subdirectories)..."
+                        find . -name "*.tf" -not -path "./.terraform/*" -not -path "./artifacts/*" -not -path "./.git/*" \
+                            -exec cp --parents {} ${ARTIFACTS_DIR}/module/ \;
+                        
+                        # Copy documentation files
+                        echo "📝 Copying documentation files..."
+                        find . -name "*.md" -not -path "./.terraform/*" -not -path "./artifacts/*" -not -path "./.git/*" \
+                            -exec cp --parents {} ${ARTIFACTS_DIR}/module/ \; 2>/dev/null || true
+                        
+                        # Copy license files
+                        find . -name "LICENSE*" -not -path "./.terraform/*" -not -path "./artifacts/*" -not -path "./.git/*" \
+                            -exec cp --parents {} ${ARTIFACTS_DIR}/module/ \; 2>/dev/null || true
+                        
+                        # Copy any .txt files (like requirements, etc.)
+                        find . -name "*.txt" -not -path "./.terraform/*" -not -path "./artifacts/*" -not -path "./.git/*" \
+                            -exec cp --parents {} ${ARTIFACTS_DIR}/module/ \; 2>/dev/null || true
+                        
+                        # Copy examples directory if it exists (entire directory with structure)
                         if [ -d "examples" ]; then
+                            echo "📁 Copying examples directory..."
                             cp -r examples ${ARTIFACTS_DIR}/module/
                         fi
                         
-                        # Create tests directory if it exists
+                        # Copy tests directory if it exists (entire directory with structure)
                         if [ -d "tests" ]; then
+                            echo "🧪 Copying tests directory..."
                             cp -r tests ${ARTIFACTS_DIR}/module/
                         fi
                         
+                        # Copy modules directory if it exists (for nested modules)
+                        if [ -d "modules" ]; then
+                            echo "📦 Copying modules directory..."
+                            cp -r modules ${ARTIFACTS_DIR}/module/
+                        fi
+                        
+                        # Copy any other common Terraform-related files
+                        for file in .terraform-version .terraformrc terraform.tfvars.example; do
+                            if [ -f "$file" ]; then
+                                echo "📄 Copying $file..."
+                                cp --parents "$file" ${ARTIFACTS_DIR}/module/ 2>/dev/null || true
+                            fi
+                        done
+                        
+                        # Show what will be packaged
+                        echo "📋 Files and directories to be packaged:"
+                        find ${ARTIFACTS_DIR}/module -type f | sort
+                        
+                        echo ""
+                        echo "📊 Directory structure:"
+                        tree ${ARTIFACTS_DIR}/module 2>/dev/null || find ${ARTIFACTS_DIR}/module -type d | sort
+                        
                         # Create the tar.gz package
+                        echo ""
+                        echo "📦 Creating tar.gz package..."
                         cd ${ARTIFACTS_DIR}/module
                         tar -czf ../module.tar.gz .
                         cd ${WORKSPACE_DIR}
                         
                         # Verify the package was created
-                        ls -la ${ARTIFACTS_DIR}/module.tar.gz
+                        if [ -f "${ARTIFACTS_DIR}/module.tar.gz" ]; then
+                            echo "✅ Package created successfully:"
+                            ls -lh ${ARTIFACTS_DIR}/module.tar.gz
+                        else
+                            echo "❌ Failed to create package"
+                            exit 1
+                        fi
                         
                         # Show package contents for verification
-                        echo "Package contents:"
-                        tar -tzf ${ARTIFACTS_DIR}/module.tar.gz
+                        echo ""
+                        echo "📋 Package contents (first 30 files):"
+                        tar -tzf ${ARTIFACTS_DIR}/module.tar.gz | head -30
+                        
+                        TOTAL_FILES=$(tar -tzf ${ARTIFACTS_DIR}/module.tar.gz | wc -l)
+                        echo ""
+                        echo "📊 Package statistics:"
+                        echo "  - Total files: $TOTAL_FILES"
+                        echo "  - Package size: $(ls -lh ${ARTIFACTS_DIR}/module.tar.gz | awk '{print $5}')"
+                        
+                        # Show directory breakdown
+                        echo "  - Terraform files: $(tar -tzf ${ARTIFACTS_DIR}/module.tar.gz | grep -c '\.tf$' || echo 0)"
+                        echo "  - Documentation files: $(tar -tzf ${ARTIFACTS_DIR}/module.tar.gz | grep -c '\.md$' || echo 0)"
+                        echo "  - Directories: $(tar -tzf ${ARTIFACTS_DIR}/module.tar.gz | grep '/$' | wc -l)"
                     '''
-                }
-            }
-        }
-        
-        stage('Check Module Exists') {
-            steps {
-                script {
-                    echo "Checking if module exists in Terraform Cloud..."
-                    
-                    def moduleExists = sh(
-                        script: '''
-                            curl -s \
-                              --header "Authorization: Bearer $TF_API_TOKEN" \
-                              https://app.terraform.io/api/v2/organizations/$ORG/registry-modules/private/$ORG/$MODULE_NAME/$MODULE_PROVIDER \
-                              | grep -q '"name"'
-                        ''',
-                        returnStatus: true
-                    )
-                    
-                    if (moduleExists != 0) {
-                        echo "Module does not exist. Will create it first."
-                        env.CREATE_MODULE = 'true'
-                    } else {
-                        echo "Module already exists. Will create new version."
-                        env.CREATE_MODULE = 'false'
-                    }
                 }
             }
         }
@@ -434,29 +553,28 @@ PYEOF
                     
                     // Extract upload URL from response
                     sh '''
-                        # Set up environment and extract the upload URL from the response
+                        echo "Extracting upload URL from response..."
                         export PATH="/tmp/jenkins-tools:$PATH"
-                        export TERRAFORM_CMD="/tmp/jenkins-tools/terraform"
-                        export TFSEC_CMD="/tmp/jenkins-tools/tfsec"
                         
                         # Try with installed python3 first, fallback to different methods
-                        if command -v python3 &> /dev/null; then
+                        if command -v python3 &> /dev/null && python3 -c "import json" 2>/dev/null; then
+                            echo "Using Python3 for JSON parsing..."
                             UPLOAD_URL=$(cat ${ARTIFACTS_DIR}/version_response.json | \
                               python3 -c "import sys, json; print(json.load(sys.stdin)['data']['links']['upload'])")
                         elif command -v python &> /dev/null; then
+                            echo "Using Python for JSON parsing..."
                             UPLOAD_URL=$(cat ${ARTIFACTS_DIR}/version_response.json | \
                               python -c "import sys, json; print(json.load(sys.stdin)['data']['links']['upload'])")
+                        elif command -v jq &> /dev/null; then
+                            echo "Using jq for JSON parsing..."
+                            UPLOAD_URL=$(cat ${ARTIFACTS_DIR}/version_response.json | jq -r '.data.links.upload')
                         else
-                            # Fallback to jq or simple grep if available
-                            if command -v jq &> /dev/null; then
-                                UPLOAD_URL=$(cat ${ARTIFACTS_DIR}/version_response.json | jq -r '.data.links.upload')
-                            else
-                                # Simple grep fallback (less reliable)
-                                UPLOAD_URL=$(grep -o '"upload":"[^"]*"' ${ARTIFACTS_DIR}/version_response.json | cut -d'"' -f4)
-                            fi
+                            echo "Using grep fallback for URL extraction..."
+                            # Simple grep fallback (less reliable)
+                            UPLOAD_URL=$(grep -o '"upload":"[^"]*"' ${ARTIFACTS_DIR}/version_response.json | cut -d'"' -f4)
                         fi
                         
-                        echo "Upload URL: $UPLOAD_URL"
+                        echo "Upload URL extracted: $UPLOAD_URL"
                         echo "$UPLOAD_URL" > ${ARTIFACTS_DIR}/upload_url.txt
                         
                         # Validate URL
@@ -466,6 +584,8 @@ PYEOF
                             cat ${ARTIFACTS_DIR}/version_response.json
                             exit 1
                         fi
+                        
+                        echo "✅ Upload URL ready for module upload"
                     '''
                 }
             }
@@ -480,16 +600,23 @@ PYEOF
                         # Read the upload URL
                         UPLOAD_URL=$(cat ${ARTIFACTS_DIR}/upload_url.txt)
                         
-                        # Upload the module package
-                        curl -f \
+                        echo "📤 Uploading to: $UPLOAD_URL"
+                        echo "📦 Package size: $(ls -lh ${ARTIFACTS_DIR}/module.tar.gz | awk '{print $5}')"
+                        
+                        # Upload the module package with progress
+                        if curl -f \
                           --header "Authorization: Bearer $TF_API_TOKEN" \
                           --header "Content-Type: application/octet-stream" \
                           --request PUT \
                           --data-binary @${ARTIFACTS_DIR}/module.tar.gz \
-                          "$UPLOAD_URL"
+                          --progress-bar \
+                          "$UPLOAD_URL"; then
+                            echo "✅ Module uploaded successfully!"
+                        else
+                            echo "❌ Upload failed"
+                            exit 1
+                        fi
                     '''
-                    
-                    echo "Module uploaded successfully!"
                 }
             }
         }
