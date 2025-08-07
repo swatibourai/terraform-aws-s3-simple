@@ -160,16 +160,19 @@ pipeline {
         }
     }
 
-    post {
-        always {
+  post {
+    always {
+        node {
             archiveArtifacts artifacts: 'artifacts/**/*', allowEmptyArchive: true
             cleanWs()
         }
-        success {
-            echo "✅ Module ${params.MODULE_NAME} version ${params.MODULE_VERSION} uploaded to Terraform Cloud"
-        }
-        failure {
-            echo "❌ Failed to upload module ${params.MODULE_NAME}. Check artifacts and logs for details."
-        }
     }
+    success {
+        echo "✅ Module ${params.MODULE_NAME} version ${params.MODULE_VERSION} uploaded to Terraform Cloud"
+    }
+    failure {
+        echo "❌ Failed to upload module ${params.MODULE_NAME}. Check artifacts and logs for details."
+    }
+}
+
 }
