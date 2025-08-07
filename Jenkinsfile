@@ -160,16 +160,29 @@ pipeline {
         }
     }
 
-    post {
-        always {
-            archiveArtifacts artifacts: 'artifacts/**/*', allowEmptyArchive: true
+   post {
+    always {
+        // Allocate a workspace again before using steps like archiveArtifacts or cleanWs
+        node {
+            // Only archive if artifacts folder exists
+            script {
+                if (fileExists('artifacts')) {
+                    archiveArtifacts artifacts: 'artifacts/**/*', allowEmptyArchive: true
+                } else {
+                    echo "No artifacts folder found to archive."
+                }
+            }
             cleanWs()
         }
-        success {
-            echo "✅ Module ${params.MODULE_NAME} version ${params.MODULE_VERSION} uploaded to Terraform Cloud"
-        }
-        failure {
-            echo "❌ Failed to upload module ${params.MODULE_NAME}. Check artifacts and logs for details."
-        }
     }
+
+    success {
+        echo "✅ Module ${params.MODULE_NAME} version ${params.MODULE_VERSION} uploaded to Terraform Cloud"
+    }
+
+    failure {
+        echo "❌ Failed to upload module ${params.MODULE_NAME}. Check artifacts and logs for details."
+    }
+}
+
 }
