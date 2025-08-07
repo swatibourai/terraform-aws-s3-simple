@@ -160,17 +160,16 @@ pipeline {
         }
     }
 
- post {
+post {
     always {
         script {
-            if (fileExists('artifacts')) {
-                echo "📦 Archiving artifacts..."
-                archiveArtifacts artifacts: 'artifacts/**/*', allowEmptyArchive: true
-            } else {
-                echo "⚠️ No artifacts directory found to archive."
-            }
-            cleanWs()
+            echo "📊 Pipeline completed"
+            echo "Module: ${params.MODULE_NAME}"
+            echo "Version: ${params.MODULE_VERSION}"
         }
+        // Archive artifacts without checking if directory exists
+        archiveArtifacts artifacts: 'artifacts/**/*', allowEmptyArchive: true
+        cleanWs()
     }
 
     success {
@@ -181,6 +180,4 @@ pipeline {
         echo "❌ Failed to upload module ${params.MODULE_NAME}. Check artifacts and logs for details."
     }
 }
-
-
 }
