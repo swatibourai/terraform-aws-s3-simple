@@ -6,12 +6,15 @@ pipeline {
         string(name: 'MODULE_VERSION', defaultValue: '1.0.0', description: 'Module version')
         string(name: 'MODULE_NAME', defaultValue: 's3-simple', description: 'Terraform module name')
         string(name: 'MODULE_PROVIDER', defaultValue: 'aws', description: 'Module provider')
+        string(name: 'GIT_COMMIT', defaultValue: '', description: 'Git commit SHA (leave empty to use env.GIT_COMMIT)')
+        string(name: 'GIT_BRANCH', defaultValue: '', description: 'Git branch name (leave empty to use env.GIT_BRANCH)')
     }
 
     environment {
         TF_API_TOKEN = credentials('terraform-cloud-api-token')
         REGISTRY_NAME = 'private'
-        GIT_COMMIT_SHA = "${env.GIT_COMMIT}"
+        GIT_COMMIT_SHA = "${params.GIT_COMMIT ?: env.GIT_COMMIT}"
+        BRANCH_NAME = "${params.GIT_BRANCH ?: env.GIT_BRANCH}"
         WORKSPACE_DIR = "${env.WORKSPACE}"
         ARTIFACTS_DIR = "${env.WORKSPACE}/artifacts"
     }
@@ -60,8 +63,8 @@ pipeline {
                 cleanWs()
                 checkout scm
                 script {
-                    echo "GIT_BRANCH: ${env.GIT_BRANCH}"
-                    if (!env.GIT_BRANCH?.contains('main')) error("This pipeline only runs on 'main' branch")
+                    echo "Branch detected: ${BRANCH_NAME}"
+                    if (!BRANCH_NAME?.contains('main')) error("This pipeline only runs on 'main' branch")
                 }
             }
         }
