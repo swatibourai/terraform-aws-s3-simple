@@ -160,24 +160,34 @@ pipeline {
         }
     }
 
-  post {
+ post {
     always {
-        script {
-            if (fileExists('artifacts')) {
-                archiveArtifacts artifacts: 'artifacts/**/*', allowEmptyArchive: true
-            } else {
-                echo "No artifacts to archive."
+        // Force Jenkins to allocate a workspace again
+        node {
+            dir("${env.WORKSPACE}") {
+                // Use try-catch in case folder doesn't exist
+                script {
+                    if (fileExists('artifacts')) {
+                        echo "📦 Archiving artifacts..."
+                        archiveArtifacts artifacts: 'artifacts/**/*', allowEmptyArchive: true
+                    } else {
+                        echo "⚠️ No artifacts directory found to archive."
+                    }
+                }
+                cleanWs()
             }
-            cleanWs()
         }
     }
+
     success {
         echo "✅ Module ${params.MODULE_NAME} version ${params.MODULE_VERSION} uploaded to Terraform Cloud"
     }
+
     failure {
         echo "❌ Failed to upload module ${params.MODULE_NAME}. Check artifacts and logs for details."
     }
 }
+
 
 
 }
