@@ -160,31 +160,16 @@ pipeline {
         }
     }
 
-post {
-    always {
-        node('master') {  // or whatever your node label is
-            script {
-                try {
-                    if (fileExists('artifacts')) {
-                        echo "📦 Archiving artifacts..."
-                        archiveArtifacts artifacts: 'artifacts/**/*', allowEmptyArchive: true
-                    } else {
-                        echo "⚠️ No artifacts directory found to archive."
-                    }
-                } catch (Exception e) {
-                    echo "⚠️ Could not check for artifacts: ${e.getMessage()}"
-                }
-                cleanWs()
-            }
+    post {
+        always {
+            archiveArtifacts artifacts: 'artifacts/**/*', allowEmptyArchive: true
+            cleanWs()
+        }
+        success {
+            echo "✅ Module ${params.MODULE_NAME} version ${params.MODULE_VERSION} uploaded to Terraform Cloud"
+        }
+        failure {
+            echo "❌ Failed to upload module ${params.MODULE_NAME}. Check artifacts and logs for details."
         }
     }
-
-    success {
-        echo "✅ Module ${params.MODULE_NAME} version ${params.MODULE_VERSION} uploaded to Terraform Cloud"
-    }
-
-    failure {
-        echo "❌ Failed to upload module ${params.MODULE_NAME}. Check artifacts and logs for details."
-    }
-}
 }
