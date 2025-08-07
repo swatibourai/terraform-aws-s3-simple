@@ -162,20 +162,20 @@ pipeline {
 
 post {
     always {
-        script {
-            echo "📊 Pipeline completed"
-            echo "Module: ${params.MODULE_NAME}"
-            echo "Version: ${params.MODULE_VERSION}"
+        node {
+            script {
+                echo "📊 Pipeline completed"
+                echo "Module: ${params.MODULE_NAME}"
+                echo "Version: ${params.MODULE_VERSION}"
+            }
+            // Archive artifacts - this needs to be inside node block
+            archiveArtifacts artifacts: 'artifacts/**/*', allowEmptyArchive: true
+            cleanWs()
         }
-        // Archive artifacts without checking if directory exists
-        archiveArtifacts artifacts: 'artifacts/**/*', allowEmptyArchive: true
-        cleanWs()
     }
-
     success {
         echo "✅ Module ${params.MODULE_NAME} version ${params.MODULE_VERSION} uploaded to Terraform Cloud"
     }
-
     failure {
         echo "❌ Failed to upload module ${params.MODULE_NAME}. Check artifacts and logs for details."
     }
