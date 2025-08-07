@@ -6,8 +6,8 @@ pipeline {
         string(name: 'MODULE_VERSION', defaultValue: '1.0.0', description: 'Module version')
         string(name: 'MODULE_NAME', defaultValue: 's3-simple', description: 'Terraform module name')
         string(name: 'MODULE_PROVIDER', defaultValue: 'aws', description: 'Module provider')
-        string(name: 'GIT_COMMIT', defaultValue: '', description: 'Git commit SHA (leave empty to use env.GIT_COMMIT)')
-        string(name: 'GIT_BRANCH', defaultValue: '', description: 'Git branch name (leave empty to use env.GIT_BRANCH)')
+        string(name: 'GIT_COMMIT', defaultValue: 'main', description: 'Git commit SHA (leave empty to use env.GIT_COMMIT)')
+        string(name: 'GIT_BRANCH', defaultValue: 'main', description: 'Git branch name (leave empty to use env.GIT_BRANCH)')
     }
 
     environment {
