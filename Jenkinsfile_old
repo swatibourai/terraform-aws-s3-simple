@@ -79,20 +79,35 @@ pipeline {
             }
         }
 
-        stage('Check/Create Module') {
-            steps {
-                script {
-                    echo "Checking if module already exists in registry..."
-                    def check = sh(script: """#!/bin/bash
-                        mkdir -p "${ARTIFACTS_DIR}"
-                        curl -s -H "Authorization: Bearer ${TF_API_TOKEN}" \\
-                          https://app.terraform.io/api/v2/organizations/${params.ORG}/registry-modules/private/${params.ORG}/${params.MODULE_NAME}/${params.MODULE_PROVIDER} \\
-                          | tee "${ARTIFACTS_DIR}/check_module_response.json" | grep -q '"name"'
-                    """, returnStatus: true)
-                    env.CREATE_MODULE = (check != 0).toString()
-                }
-            }
-        }
+  stage('Check module') {
+    def artifactsDir = "${env.WORKSPACE}/artifacts"
+    sh "mkdir -p '${artifactsDir}'"
+
+    // Call API and capture HTTP status
+    sh """
+        set -e
+        HTTP_STATUS=$(curl -s -w "%{http_code}" \
+            -H "Authorization: Bearer ${tfApiToken}" \
+            "https://app.terraform.io/api/v2/organizations/${org}/registry-modules/private/${org}/${name}/${provider}" \
+            -o "${artifactsDir}/check_module_response.json")
+
+        echo "\$HTTP_STATUS" > "${artifactsDir}/http_status.txt"
+    """
+
+    def statusCode = readFile("${artifactsDir}/http_status.txt").trim()
+    echo "Terraform API HTTP status: ${statusCode}"
+
+    if (statusCode == "200") {
+        echo "Module already exists"
+        env.CREATE_MODULE = "false"
+    } else if (statusCode == "404") {
+        echo "Module not found — will create new one"
+        env.CREATE_MODULE = "true"
+    } else {
+        error "Unexpected HTTP status: ${statusCode}"
+    }
+}
+
 
         stage('Package Module') {
             steps {
