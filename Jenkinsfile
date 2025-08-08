@@ -33,9 +33,7 @@ pipeline {
         }
 
         stage('Run Publish Module') {
-                when {
-                   expression { params.GIT_BRANCH == 'main' }
-                    }
+               when { expression { true } } 
 
             
             steps {
