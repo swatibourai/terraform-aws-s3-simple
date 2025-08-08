@@ -33,9 +33,11 @@ pipeline {
         }
 
         stage('Run Publish Module') {
-            when {
-                branch 'main'
-            }
+                when {
+                  expression { env.BRANCH_NAME == 'main' || params.GIT_BRANCH == 'main' }
+                    }
+
+            
             steps {
                 script {
                     def publishModule = load 'scripts/publishterraformmodule.groovy'
