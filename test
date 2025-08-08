@@ -1,0 +1,17 @@
+Cat payload.json
+{
+  "data": {
+    "type": "registry-module-versions",
+    "attributes": {
+      "version": “1.0.0”,
+      "commit-sha": "abcdef12345"
+    }
+  }
+}
+
+curl \
+  --header "Authorization: Bearer $TOKEN" \
+  --header "Content-Type: application/vnd.api+json" \
+  --request POST \
+  --data @payload.json \
+  https://app.terraform.io/api/v2/organizations/Chase-UK-Org/registry-modules/private/Chase-UK-Org/s3-golden/aws/versions
