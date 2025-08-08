@@ -3,11 +3,12 @@ Cat payload.json
   "data": {
     "type": "registry-module-versions",
     "attributes": {
-      "version": “1.0.0”,
-      "commit-sha": "abcdef12345"
-    }
+      "version": "1.0.0",
+      "commit-sha": "pqr12345" 
+   }
   }
 }
+
 
 curl \
   --header "Authorization: Bearer $TOKEN" \
