@@ -1,12 +1,15 @@
 def publishModuleFunction(String org, String version, String name, String provider, String artifactsDir, String gitCommitSha, String tfApiToken) {
 
-    stage('Validate Parameters') {
-        echo "Validating parameters..."
-        if (!name?.trim()) error("Module name cannot be empty")
-        if (!provider?.trim()) error("Module provider cannot be empty")
-        if (!version.matches(/^\d+\\.\\d+\\.\\d+$/)) error("Invalid version format")
+stage('Validate Parameters') {
+    echo "Validating parameters..."
+    echo "MODULE_VERSION from Jenkins: '${MODULE_VERSION}'"
+    if (!MODULE_VERSION || !(MODULE_VERSION ==~ /^\d+\.\d+\.\d+$/)) {
+        error "Invalid version format"
     }
+}
 
+
+    
     stage('Setup Tools') {
         sh """#!/bin/bash
             mkdir -p /tmp/jenkins-tools
