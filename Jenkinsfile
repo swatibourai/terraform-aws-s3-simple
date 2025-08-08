@@ -34,7 +34,7 @@ pipeline {
 
         stage('Run Publish Module') {
                 when {
-                  expression { env.BRANCH_NAME == 'main' || params.GIT_BRANCH == 'main' }
+                   expression { params.GIT_BRANCH == 'main' }
                     }
 
             
