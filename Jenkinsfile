@@ -27,7 +27,7 @@ pipeline {
             steps {
                 script {
                     // Load and run the publish function
-                    def publishModule = load 'scripts/publishModule.groovy'
+                    def publishModule = load 'scripts/publishterraformmodule.groovy'
                     publishModule.publishModuleFunction(
                         env.ORG,
                         env.MODULE_VERSION,
