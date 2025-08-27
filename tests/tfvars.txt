@@ -1,0 +1,18 @@
+###default tag variables
+seal_id    = "105250" 
+squad_name = "FinOps" 
+app_name   = "tfc-s3-demo"
+additional_tags = {
+    environment = "dev"
+  }
+
+###s3 module variable
+bucket_name = ""
+#kms_key_arn = ""
+kms_key_arn = ""
+
+##aws config
+assume_role_arn = ""
+region = "eu-east-1"
+account_name = ""
+
