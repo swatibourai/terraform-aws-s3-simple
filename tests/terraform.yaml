@@ -1,0 +1,91 @@
+apiVersion: v1
+kind: Pod
+spec:
+  securityContext:
+    fsGroup: 1000
+  nodeSelector:
+    nodetype: cloudbeesagents
+  tolerations:
+    - key: cloudbeesagents
+      operator: Equal
+      value: "true"
+      effect: NoSchedule
+  containers:
+    - name: curl
+      image: dockerprod.artifactory.dyn.prd.aws.jpmchase.net/dynamo-base/base-curl:0.1.6
+      command: [ "cat" ]
+      tty: true
+      resources:
+        limits:
+          memory: 512Mi
+        requests:
+          memory: 512Mi
+    - name: terraform
+      image: dockerprod.artifactory.dyn.prd.aws.jpmchase.net/dynamo-base/terraform:v0.2.27
+      tty: true
+      command: [ "cat" ]
+      resources:
+        limits:
+          memory: 2Gi
+        requests:
+          memory: 2Gi
+    - name: securityscanagent
+      image: dockerprod.artifactory.dyn.prd.aws.jpmchase.net/dynamo-security-scanning/security-scan-agent:1.0.156
+      tty: true
+      command: [ 'cat' ]
+      resources:
+        limits:
+          memory: 128Mi
+        requests:
+          memory: 128Mi
+    - name: snyk
+      image: dockerprod.artifactory.dyn.prd.aws.jpmchase.net/dynamo-base/base-snyk:1.0.4
+      tty: true
+      command: [ 'cat' ]
+      volumeMounts:
+        - mountPath: "/home/jenkins"
+          name: "jenkins-home"
+          readOnly: false
+      resources:
+        limits:
+          memory: 256Mi
+        requests:
+          memory: 256Mi
+    - name: secretincode
+      image: dockerprod.artifactory.dyn.prd.aws.jpmchase.net/dynamo-base/base-sic:v1.0.4
+      tty: true
+      resources:
+        limits:
+          memory: 512Mi
+        requests:
+          memory: 512Mi
+    - name: python
+      image: dockerprod.artifactory.dyn.prd.aws.jpmchase.net/dynamo-base/base-python310:v1.1.13
+      tty: true
+      command: [ "cat" ]
+      resources:
+        limits:
+          memory: 2Gi
+        requests:
+          memory: 2Gi
+    - name: sonarqube
+      image: dockerprod.artifactory.dyn.prd.aws.jpmchase.net/sonnar-scanner/sonar-scanner-cli:v0.2.36
+      command: [ "cat" ]
+      tty: true
+      resources:
+        limits:
+          memory: 4Gi
+        requests:
+          memory: 4Gi
+    - name: tfe-client
+      image: dockerprod.artifactory.dyn.prd.aws.jpmchase.net/dynamo-tools/tfe-client:v0.1.205-202211161153
+      tty: true
+      command: [ "cat" ]
+      resources:
+        limits:
+          memory: 512Mi
+        requests:
+          memory: 512Mi
+  volumes:
+    - name: "jenkins-home"
+      emptyDir: { }
