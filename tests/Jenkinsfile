@@ -1,0 +1,112 @@
+@Library('dynamo-shared-lib@CPE-2886') _
+def podTemplateYaml = libraryResource('terraform.yaml')
+
+/*tfcBuild {
+    kubernetesLabel = 'terraform.yaml'
+    kubernetesYaml = podTemplateYaml
+
+    // Terraform version
+    terraformVersion = '1.4.6'
+
+    // Enable Terraform validation
+    terraformValidate = true
+
+    // Dynamo SEAL_ID for SSAP scanning
+    sealId = '112175'
+    // Bitbucket credentials
+    bitbucketCredentials = 'BB_CREDS'
+}*/
+pipeline {
+    agent {
+        kubernetes {
+            yaml podTemplateYaml
+            inheritFrom 'default-kaniko'
+        }
+    }
+
+    environment {
+		SEAL_ID = '112175'
+		GIT_PROJECT_KEY = 'TFC'
+		GIT_REPO_NAME = 'tfc-poc-icb-terraform-module-s3'
+		IS_PR_BUILD = env.BRANCH_NAME.startsWith("PR-")
+        NEW_VERSION = ''
+		SUBMIT_JET_EVENTS = true
+		DEPLOYMENT_TOOL = 'other'
+        HARNESS_ORG_ID = 'CoreEngineering'
+        HARNESS_PROJECT_ID = 'TFC'
+        HARNESS_PIPELINE_ID = "tfcs3PRworkflowharnessintegration"
+        HARNESS_PIPELINE_TRIGGER_ID = "Cloudbees_CI_trigger_tfcs3PRworkflow"
+    }
+
+  stages
+  {
+   stage('Trigger harness to TFC workflow: Harness DEV'){
+            steps {
+                script {
+                       customharnessTrigger(env.HARNESS_ORG_ID, env.HARNESS_PROJECT_ID, env.HARNESS_PIPELINE_ID, env.HARNESS_PIPELINE_TRIGGER_ID)
+                         echo "TFC run was successful"
+                }
+            }
+        }
+    /*stage('Trigger harness to TFC workflow: Harness DEV'){
+            steps {
+                script {
+                       def harnessResponse= customharnessTrigger("${env.HARNESS_ORG_ID}", "${env.HARNESS_PROJECT_ID}", "${env.HARNESS_PIPELINE_ID}", "${env.HARNESS_PIPELINE_TRIGGER_ID}")
+                       def responseJson = readJSON text: harnessResponse
+                       if(responseJson.status == "SUCCESS"){
+                         echo "TFC run was successful"
+                       }
+                }
+            }
+        }
+  } */
+  }
+}
+
+  def customharnessTrigger(orgIdentifier, projectIdentifier, pipelineIdentifier, triggerIdentifier, params = '{}', harnessCredentialsId = 'HARNESS_PROD_CREDS', containerName = 'curl') {
+  container(name: containerName) {
+    withCredentials([[$class: 'UsernamePasswordMultiBinding', credentialsId: harnessCredentialsId, passwordVariable: 'HARNESS_API_KEY', usernameVariable: 'ACCOUNT_IDENTIFIER']]) {
+      triggerPipelineResponse = sh(script: """
+        curl -s -X POST \
+         -H 'content-type: application/json' \
+         -H 'X-Api-Key: ${HARNESS_API_KEY}' \
+         --url 'https://app.harness.io/gateway/pipeline/api/webhook/custom/v2?accountIdentifier=${ACCOUNT_IDENTIFIER}&orgIdentifier=${orgIdentifier}&projectIdentifier=${projectIdentifier}&pipelineIdentifier=${pipelineIdentifier}&triggerIdentifier=${triggerIdentifier}' \
+         -d '${params}'
+      """,
+              returnStdout: true)
+
+      triggerPipelineResponseJSON = readJSON text: triggerPipelineResponse
+      echo "$triggerPipelineResponseJSON"
+      catchError(stageResult: 'UNSTABLE', buildResult: currentBuild.result) {
+        if (triggerPipelineResponseJSON.status == "ERROR") {
+          println triggerPipelineResponse
+          error(triggerPipelineResponseJSON.message)
+        } else if(triggerPipelineResponseJSON.data && triggerPipelineResponseJSON.data.apiUrl) {
+          sleep(30) // It takes between 20 to 30 seconds for harness to trigger the pipeline execution
+          retry(3) {
+            getExecutionResponse = sh(script: """
+              curl -s -X GET \
+              -H 'content-type: application/json' \
+              -H 'X-Api-Key: ${HARNESS_API_KEY}' \
+              --url '${triggerPipelineResponseJSON.data.apiUrl}'
+            """, returnStdout: true)
+            getExecutionResponseJSON = readJSON text: getExecutionResponse
+
+            if(getExecutionResponseJSON.status == "ERROR") {
+              sleep(5)
+              error(getExecutionResponseJSON.message)
+            } else if (getExecutionResponseJSON.data && getExecutionResponseJSON.data.webhookProcessingDetails.exceptionOccured == true) {
+              // Handle trigger conditions errors
+              error(getExecutionResponseJSON.data.webhookProcessingDetails.message)
+            } else if (getExecutionResponseJSON.data && getExecutionResponseJSON.data.executionUrl) {
+              println "EXECUTION URL"
+              println getExecutionResponseJSON.data.executionUrl
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+     
