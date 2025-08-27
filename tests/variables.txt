@@ -1,0 +1,148 @@
+variable "enabled" {
+  description = <<-EOT
+  Determines whether the resources in this module should be created. 
+  Set to false to disable resource creation. 
+  
+  Default: true
+  EOT
+  type        = bool
+  default     = true
+}
+
+variable "additional_tags" {
+  description = <<-EOT
+  A map of additional tags to apply to the resources created by this module. 
+  Consider using 'tags_all' in the AWS provider to apply tags consistently across all resources and avoid repetition.
+  
+  Default: {}
+  EOT
+  type        = map(string)
+  default     = {}
+}
+
+variable "kms_key_arn" {
+  description = <<-EOT
+  The Amazon Resource Name (ARN) of the AWS Key Management Service (KMS) key used for server-side encryption (SSE) of the S3 bucket.
+  EOT
+  type        = string
+}
+
+variable "bucket_name" {
+  description = <<-EOT
+  The unique name of the S3 bucket to be created. 
+  Bucket names must be globally unique and comply with S3 naming conventions.
+  EOT
+  type        = string
+}
+
+# -------------------------------------- LIFECYCLE -----------------------------------------
+
+variable "bucket_lifecycle" {
+  description = <<-EOT
+  Configuration for the S3 bucket's object lifecycle management. 
+  This variable allows you to define rules for transitioning and expiring objects within the bucket based on specific criteria.
+
+  Attributes:
+  - transition_days: Specifies the number of days after which objects are transitioned to a different storage class.
+  - transition_class: Defines the storage class to which objects are transitioned (e.g., "GLACIER").
+  - expiration_days: Indicates the number of days after which objects are permanently deleted. This is optional and can be set to manage data retention.
+  - expiration_non_current_days: Specifies the number of days after which non-current versions of objects are permanently deleted.
+  - enable_short_lived_prefix_lifecycle: A boolean flag to enable lifecycle rules for short-lived data based on specified prefixes.
+  - enable_long_lived_prefix_lifecycle: A boolean flag to enable lifecycle rules for long-lived data based on specified prefixes.
+  - short_lived_prefix: The prefix used to identify short-lived data in the S3 bucket, allowing targeted lifecycle management.
+  - short_lived_expiration_days: The number of days after which short-lived data is expired, based on the specified prefix.
+  - long_lived_prefix: The prefix used to identify long-lived data in the S3 bucket, allowing targeted lifecycle management.
+  - long_lived_transition_class: The storage class to transition long-lived data to, providing options for cost-effective storage.
+  - long_lived_transition_days: The number of days after which long-lived data is transitioned to the specified storage class.
+
+  Default: null (no lifecycle rules applied by default)
+  EOT
+
+  type = object({
+    transition_days                     = number
+    transition_class                    = string
+    expiration_days                     = number
+    expiration_non_current_days         = number
+    enable_short_lived_prefix_lifecycle = optional(bool, false)
+    enable_long_lived_prefix_lifecycle  = optional(bool, false)
+    short_lived_prefix                  = optional(string)
+    short_lived_expiration_days         = optional(number)
+    long_lived_prefix                   = optional(string)
+    long_lived_transition_class         = optional(string, "STANDARD_IA")
+    long_lived_transition_days          = optional(number)
+  })
+  default = null
+}
+
+variable "object_lock" {
+  description = <<-EOT
+  Configuration for S3 Object Lock, which helps prevent objects from being deleted or overwritten for a fixed amount of time or indefinitely.
+
+  Attributes:
+  - default_retention: Specifies the default retention mode and period for new objects placed in the bucket.
+    - mode: The retention mode (e.g., "GOVERNANCE" or "COMPLIANCE").
+    - days: The number of days to retain objects.
+
+  Default: null (object locking disabled)
+  EOT
+
+  type = object({
+    default_retention = object({
+      mode = string
+      days = number
+    })
+  })
+
+  default = null
+}
+
+variable "bucket_policy" {
+  description = <<-EOT
+  Configuration for the S3 bucket policy, which defines access permissions for the bucket.
+
+  Attributes:
+  - additional_policy_statements: A list of additional policy statements to include in the bucket policy.
+  - vpc_ids: A list of Source VPC IDs that are allowed to access the bucket.
+  - vpc_endpoint_ids: A list of VPC endpoint IDs that are allowed to access the bucket.
+  - non_vpc_aws_service_roles_arn: A list of ARNs for AWS service roles that are allowed to access the bucket. This should be used in scenarios when the networking source for the bucket cannot be verified.
+
+  Default: {}
+  EOT
+
+  type = object({
+    additional_policy_statements  = optional(list(string), [])
+    vpc_ids                       = optional(list(string), [])
+    vpc_endpoint_ids              = optional(list(string), [])
+    non_vpc_aws_service_roles_arn = optional(list(string), [])
+  })
+
+  default = {}
+}
+
+# -------------------------------------- LOGGING -----------------------------------------
+
+variable "access_logging" {
+  description = <<-EOT
+  Configuration for server-access logging, which records requests made to the S3 bucket. 
+  These parameters are typically used to set up logging via CloudFormation exports.
+
+  Attributes:
+  - cloudformation_export_logbucket_prefix: The prefix for the log bucket, used in CloudFormation exports.
+  - cloudformation_export_logbucket_name: The name of the log bucket, used in CloudFormation exports.
+
+  Default: {
+    cloudformation_export_logbucket_prefix = "core-LogBucket-Prefix"
+    cloudformation_export_logbucket_name   = "core-LogBucket-Name"
+  }
+  EOT
+
+  type = object({
+    cloudformation_export_logbucket_prefix = string
+    cloudformation_export_logbucket_name   = string
+  })
+
+  default = {
+    cloudformation_export_logbucket_prefix = "core-LogBucket-Prefix"
+    cloudformation_export_logbucket_name   = "core-LogBucket-Name"
+  }
+}
