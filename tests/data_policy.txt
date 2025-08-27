@@ -1,0 +1,242 @@
+data "aws_iam_policy_document" "bucket_policy" {
+  statement {
+    # s3:004: Blocks non-SSL in-transit encryption connections
+    # SID *MUST* be DenyNonSSLConnections, with condition aws:SecureTransport: false.
+    sid    = "DenyNonSSLConnections"
+    effect = "Deny"
+    actions = [
+      "s3:*",
+    ]
+
+    principals {
+      type        = "AWS"
+      identifiers = ["*"]
+    }
+
+    resources = [
+      aws_s3_bucket.s3_bucket[0].arn,
+      "${aws_s3_bucket.s3_bucket[0].arn}/*",
+    ]
+
+    condition {
+      test     = "Bool"
+      variable = "aws:SecureTransport"
+      values = [
+        "false",
+      ]
+    }
+  }
+
+  # s3:009: Prevent S3 bucket pre-signed URLs being used when the signature is greater than 2 hours old.
+  statement {
+    sid     = "DenyPresignedURLIfSignatureAgeIsAncient"
+    effect  = "Deny"
+    actions = ["s3:*"]
+    principals {
+      type        = "*"
+      identifiers = ["*"]
+    }
+    resources = [
+      "${aws_s3_bucket.s3_bucket[0].arn}/*",
+    ]
+    condition {
+      test     = "NumericGreaterThan"
+      variable = "s3:signatureAge"
+      values = [
+        "7200000" # 1000 (milliseconds) * 60 (1 min) * 60 (1 hour) * 2 (2 hours) = 7,200,000
+      ]
+    }
+  }
+
+  statement {
+    sid    = "DenyIncorrectEncryptionKey"
+    effect = "Deny"
+    actions = [
+      "s3:PutObject",
+    ]
+
+    principals {
+      type        = "AWS"
+      identifiers = ["*"]
+    }
+    resources = [
+      "${aws_s3_bucket.s3_bucket[0].arn}/*",
+    ]
+    condition {
+      test     = "StringNotEquals"
+      variable = "s3:x-amz-server-side-encryption-aws-kms-key-id"
+      values = [
+        var.kms_key_arn,
+      ]
+    }
+  }
+
+  statement {
+    sid    = "DenyPublicReadACL"
+    effect = "Deny"
+    actions = [
+      "s3:PutObject",
+      "s3:PutObjectAcl",
+    ]
+
+    principals {
+      type        = "AWS"
+      identifiers = ["*"]
+    }
+
+    resources = [
+      "${aws_s3_bucket.s3_bucket[0].arn}/*",
+    ]
+
+    condition {
+      test     = "StringEquals"
+      variable = "s3:x-amz-acl"
+      values = [
+        "public-read",
+        "public-read-write",
+        "authenticated-read",
+      ]
+    }
+  }
+
+  statement {
+    sid    = "DenyPublicReadGrant"
+    effect = "Deny"
+    actions = [
+      "s3:PutObject",
+      "s3:PutObjectAcl",
+    ]
+
+    principals {
+      type        = "AWS"
+      identifiers = ["*"]
+    }
+
+    resources = [
+      "${aws_s3_bucket.s3_bucket[0].arn}/*",
+    ]
+
+    condition {
+      test     = "StringLike"
+      variable = "s3:x-amz-grant-read"
+      values = [
+        "*http://acs.amazonaws.com/groups/global/AllUsers*",
+        "*http://acs.amazonaws.com/groups/global/AuthenticatedUsers*",
+      ]
+    }
+  }
+
+  statement {
+    sid    = "DenyPublicBucketReadACL"
+    effect = "Deny"
+    actions = [
+      "s3:PutBucketAcl",
+    ]
+
+    principals {
+      type        = "AWS"
+      identifiers = ["*"]
+    }
+
+    resources = [
+      aws_s3_bucket.s3_bucket[0].arn,
+    ]
+
+    condition {
+      test     = "StringEquals"
+      variable = "s3:x-amz-acl"
+      values = [
+        "public-read",
+        "public-read-write",
+        "authenticated-read",
+      ]
+    }
+  }
+
+  # s3:008: Block S3 buckets from being accessed outside of the JPMC perimeter network
+  # The guardrail explicitly checks for "NotIpAddress" hence "NotIpAddressIfExists" will be non-compliant.
+  # This policy statement denies access to objects inside the S3 bucket, UNLESS
+  # * The request originates from specific IP addresses, OR
+  # * The request originates from a specific VPC endpoint, OR
+  # * The request originates from a specific VPC ID, OR 
+  # * The request originates from a principal arn.
+  statement {
+    sid    = "DenyNonVPCEndpointNonJPMCIPConnections"
+    effect = "Deny"
+    actions = [
+      "s3:*",
+    ]
+
+    principals {
+      type        = "AWS"
+      identifiers = ["*"]
+    }
+
+    resources = [
+      "${aws_s3_bucket.s3_bucket[0].arn}/*",
+    ]
+
+    condition {
+      # This IP list is derived from CS-16015. Attempting to allow any other IP will result in a FARM finding.
+      test     = "NotIpAddress"
+      variable = "aws:SourceIp"
+      values = [
+        # JPMC on Prem IP Ranges
+        "159.53.0.0/16",    # NA region
+        "146.143.0.0/16",   # NADC NA region
+        "170.148.0.0/16",   # EMEA and APAC region
+        "103.246.196.0/23", # Legacy India region
+        "161.121.0.0/16",   # APAC including India region
+
+        # JPMC Cloud IP Ranges
+        "100.29.46.83/32",
+        "23.20.211.171/32",
+        "44.214.68.114/32",
+
+        "100.29.46.83/32",
+        "23.20.211.171/32",
+        "44.214.68.114/32",
+
+        "44.230.118.215/32",
+        "52.13.69.82/32",
+        "52.41.175.126/32",
+        "34.249.175.81/32",
+        "34.250.128.192/32",
+        "63.32.126.0/32",
+        "3.9.112.41/32",
+        "3.10.31.207/32",
+        "18.135.4.34/32",
+        "13.251.237.207/32",
+        "18.139.157.235/32",
+        "54.254.47.181/32",
+      ]
+    }
+
+    dynamic "condition" {
+      for_each = length(var.bucket_policy.vpc_endpoint_ids) > 0 ? [1] : []
+      content {
+        test     = "StringNotEquals"
+        variable = "aws:sourceVpce"
+        values   = var.bucket_policy.vpc_endpoint_ids
+      }
+    }
+
+    dynamic "condition" {
+      for_each = length(var.bucket_policy.vpc_ids) > 0 ? [1] : []
+      content {
+        test     = "StringNotEquals"
+        variable = "aws:SourceVpc"
+        values   = var.bucket_policy.vpc_ids
+      }
+    }
+
+    dynamic "condition" {
+      for_each = length(var.bucket_policy.non_vpc_aws_service_roles_arn) > 0 ? [1] : []
+      content {
+        test     = "StringNotEquals"
+        variable = "aws:PrincipalArn"
+        values   = var.bucket_policy.non_vpc_aws_service_roles_arn
+      }
+    }
+  }
+}
