@@ -1,0 +1,205 @@
+terraform {
+  required_providers {
+    aws = {
+      source  = "hashicorp/aws"
+      version = ">= 5.0"
+    }
+  }
+  required_version = ">= 1.0"
+}
+
+locals {
+  # This value is an arbitrary default to satisfy terraform
+  default_value = 999
+
+  tags = merge(
+    var.additional_tags,
+    {
+      # s3:001: S3 backups must be enabled. We opt-out of backups by automatically setting this value to NOBACKUP.
+      "CORE_BACKUPS_RETENTION" = "NOBACKUP"
+      # This EXTERNAL_PRE_SIGNED_URL tag is a firmwide recommendation for describing a transient bucket. Currently we do not offer this functionality, so this value is default to false.
+      # In the event that we have to implement this functionality, the following must be implemented;
+      # s3:012: Force the lifecycle policy to delete any objects after 12 days.
+      # s3:013: Prevent Signatures being used that are older than 10 minutes.
+      "EXTERNAL_PRE_SIGNED_URL" : "FALSE"
+    }
+  )
+
+  # This lifecycle object is used to simplify the terraform by not requiring monotonous null coalesce checks
+  lifecycle = var.bucket_lifecycle != null ? var.bucket_lifecycle : {
+    transition_days                     = null
+    expiration_days                     = null
+    expiration_non_current_days         = null
+    transition_class                    = "GLACIER"
+    enable_short_lived_prefix_lifecycle = "false"
+    enable_long_lived_prefix_lifecycle  = "false"
+    short_lived_prefix                  = ""
+    short_lived_expiration_days         = null
+    long_lived_prefix                   = ""
+    long_lived_transition_class         = "STANDARD_IA"
+    long_lived_transition_days          = null
+  }
+}
+
+resource "aws_s3_bucket" "s3_bucket" {
+  count         = var.enabled ? 1 : 0
+  bucket        = var.bucket_name
+  tags          = local.tags
+  force_destroy = false
+}
+
+# s3:003: Non-transient S3 buckets should have versioning enabled.
+resource "aws_s3_bucket_versioning" "versioning" {
+  bucket = aws_s3_bucket.s3_bucket[0].bucket
+  versioning_configuration {
+    status = "Enabled"
+  }
+}
+
+resource "aws_s3_bucket_lifecycle_configuration" "lifecycle" {
+  bucket = aws_s3_bucket.s3_bucket[0].bucket
+
+  rule {
+    id = "short_lived_data_expiration"
+    status = (
+      local.lifecycle.enable_short_lived_prefix_lifecycle &&
+      local.lifecycle.short_lived_expiration_days != null &&
+      local.lifecycle.short_lived_prefix != ""
+    ) ? "Enabled" : "Disabled"
+
+    filter {
+      prefix = local.lifecycle.short_lived_prefix
+    }
+
+    expiration {
+      days = coalesce(local.lifecycle.short_lived_expiration_days, local.default_value)
+    }
+  }
+
+  rule {
+    id = "long_lived_data_transition"
+    status = (
+      local.lifecycle.enable_long_lived_prefix_lifecycle &&
+      local.lifecycle.long_lived_transition_days != null &&
+      local.lifecycle.long_lived_prefix != ""
+    ) ? "Enabled" : "Disabled"
+
+    filter {
+      prefix = local.lifecycle.long_lived_prefix
+    }
+
+    transition {
+      storage_class = local.lifecycle.long_lived_transition_class
+      days          = coalesce(local.lifecycle.long_lived_transition_days, local.default_value)
+    }
+  }
+
+  rule {
+    id     = "transition"
+    status = local.lifecycle.transition_days != null && coalesce(local.lifecycle.transition_days, 0) < coalesce(local.lifecycle.expiration_days, 0) ? "Enabled" : "Disabled"
+
+    transition {
+      storage_class = local.lifecycle.transition_class
+      days          = coalesce(local.lifecycle.transition_days, local.default_value)
+    }
+  }
+
+  rule {
+    id     = "noncurrent_version_transition"
+    status = local.lifecycle.transition_days != null && coalesce(local.lifecycle.transition_days, 0) < coalesce(local.lifecycle.expiration_days, 0) ? "Enabled" : "Disabled"
+
+    noncurrent_version_transition {
+      storage_class   = local.lifecycle.transition_class
+      noncurrent_days = coalesce(local.lifecycle.transition_days, local.default_value)
+    }
+  }
+
+  rule {
+    id     = "expiration"
+    status = local.lifecycle.expiration_days != null ? "Enabled" : "Disabled"
+
+    expiration {
+      # coalesce is used just to satisfy terraform as this value cannot be null or 0
+      days = coalesce(local.lifecycle.expiration_days, local.default_value)
+    }
+  }
+
+  rule {
+    id     = "noncurrent_expiration"
+    status = local.lifecycle.expiration_non_current_days != null ? "Enabled" : "Disabled"
+
+    noncurrent_version_expiration {
+      # coalesce is used just to satisfy terraform as this value cannot be null or 0
+      noncurrent_days = coalesce(local.lifecycle.expiration_non_current_days, local.default_value)
+    }
+  }
+
+  rule {
+    id     = "object_delete_marker_expiration"
+    status = "Enabled"
+
+    expiration {
+      expired_object_delete_marker = true
+    }
+  }
+
+  # s3:011: Delete incomplete multipart uploads
+  rule {
+    id     = "abort_incomplete_upload"
+    status = "Enabled"
+    abort_incomplete_multipart_upload {
+      days_after_initiation = 7
+    }
+  }
+}
+
+# s3:007: Server access logging must be enabled
+resource "aws_s3_bucket_logging" "logging" {
+  bucket = aws_s3_bucket.s3_bucket[0].bucket
+
+  target_bucket = data.aws_cloudformation_export.LogBucket-Name.value
+  target_prefix = data.aws_cloudformation_export.LogBucket-Prefix.value
+}
+
+resource "aws_s3_bucket_server_side_encryption_configuration" "encryption" {
+  bucket = aws_s3_bucket.s3_bucket[0].bucket
+
+  rule {
+    # s3:002: S3 buckets must be encrypted with a KMS customer-managed key.
+    apply_server_side_encryption_by_default {
+      sse_algorithm     = "aws:kms"
+      kms_master_key_id = var.kms_key_arn
+    }
+
+    bucket_key_enabled = true
+  }
+}
+
+resource "aws_s3_bucket_public_access_block" "deny_public_access" {
+  # s3:005: Block public access to S3 buckets
+  bucket                  = aws_s3_bucket.s3_bucket[0].bucket
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
+}
+
+resource "aws_s3_bucket_object_lock_configuration" "object_lock" {
+  count  = var.object_lock != null ? 1 : 0
+  bucket = aws_s3_bucket.s3_bucket[0].bucket
+
+  # object_lock_enabled only accepts the value "Enabled".
+  object_lock_enabled = "Enabled"
+
+  rule {
+    default_retention {
+      mode = var.object_lock.default_retention.mode
+      days = var.object_lock.default_retention.days
+    }
+  }
+
+  depends_on = [
+    # Object locking can only be enabled on version enabled buckets, so versioning must complete first.
+    aws_s3_bucket_versioning.versioning
+  ]
+}
